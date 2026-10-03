@@ -99,7 +99,7 @@ cat >"$tmp/bin/bluetoothctl" <<'EOF'
 #!/bin/sh
 case "$*" in
   "devices Connected") echo "Device AA:BB:CC:DD:EE:FF Pixel Buds Pro" ;;
-  "info AA:BB:CC:DD:EE:FF") echo "Connected: yes" ;;
+  "info AA:BB:CC:DD:EE:FF") printf '%s\n' "Connected: yes" "UUID: Vendor specific (25e97ff7-24ce-4c4c-8951-f764a708f7b5)" ;;
   *) exit 1 ;;
 esac
 EOF

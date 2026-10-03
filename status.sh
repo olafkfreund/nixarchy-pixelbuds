@@ -88,7 +88,31 @@ is_num() { printf '%s' "$1" | grep -Eq '^[0-9]{1,3}$' && [ "$1" -le 100 ]; }
 
 [ -n "$BLUETOOTHCTL" ] || { echo "connected=0"; exit 0; }
 cap 8192 "$TIMEOUT" --foreground 5 "$BLUETOOTHCTL" devices Connected || out=""
-dev=$(printf '%s\n' "$out" | grep -i 'pixel buds' | head -n1 | cut -c1-200)
+devs=$(printf '%s\n' "$out" | grep -E '^Device ([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2} ' | cut -c1-200)
+
+# Identify the buds by the service pbpctrl actually talks to — Google's
+# "Maestro" RFCOMM UUID — never by name: the alias is user-editable, so a
+# renamed pair would vanish. The Fast Pair UUID (fe2c, shown as
+# "UUID: Google") is no substitute; many non-Google headsets advertise it.
+# Name matches are tried first, so the usual case costs a single info call;
+# the scan is capped so a crowded adapter can't stretch the run.
+MAESTRO_UUID=25e97ff7-24ce-4c4c-8951-f764a708f7b5
+cands=$( { printf '%s\n' "$devs" | grep -i 'pixel buds'
+           printf '%s\n' "$devs" | grep -iv 'pixel buds'; } | grep . | head -n8)
+
+dev=""
+while IFS= read -r line; do
+  [ -n "$line" ] || continue
+  mac=$(printf '%s' "$line" | awk '{print $2}')
+  cap 8192 "$TIMEOUT" --foreground 5 "$BLUETOOTHCTL" info "$mac" || continue
+  printf '%s\n' "$out" | grep -q 'Connected: yes' || continue
+  printf '%s\n' "$out" | grep -Eiq "^[[:space:]]*UUID:.*\($MAESTRO_UUID\)" || continue
+  dev=$line
+  break
+done <<EOF
+$cands
+EOF
+
 if [ -z "$dev" ]; then
   echo "connected=0"
   exit 0
@@ -96,10 +120,6 @@ fi
 
 addr=$(printf '%s' "$dev" | awk '{print $2}')
 name=$(printf '%s' "$dev" | cut -d' ' -f3- | cut -c1-100)
-printf '%s' "$addr" | grep -Eq '^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$' || {
-  echo "connected=0"
-  exit 0
-}
 echo "connected=1"
 echo "addr=$addr"
 echo "name=$name"
