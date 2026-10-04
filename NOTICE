@@ -1,0 +1,27 @@
+Pixel Buds for Omarchy
+Copyright (c) 2026 Ryan Doupe
+Licensed under the MIT License (see LICENSE), except as noted below.
+
+bridge/maestro.py is a Python port of parts of libmaestro from pbpctrl
+(https://github.com/qzed/pbpctrl), Copyright (c) 2022 Maximilian Luz.
+pbpctrl is dual-licensed MIT OR Apache-2.0; this port is used and
+distributed under the Apache License, Version 2.0 (see LICENSE-APACHE).
+Ported material: the HDLC frame encoder/decoder and CRC usage
+(libmaestro/src/hdlc), the pw_rpc 65599 name hash (src/pwrpc/id.rs), the
+Maestro peer/channel address map and channel resolution
+(src/protocol/addr.rs, src/protocol/utils.rs), the Maestro message field
+numbers (proto/maestro_pw.proto) and the setting conversions, including the
+balance encoding and the ANC cycle order (src/service/settings.rs,
+cli/src/main.rs). Modifications: rewritten in Python, decoders made
+byte-bounded and strict for untrusted input, and a blocking RPC client
+written for this project. The protocol test vectors in
+tests/python/test_maestro.py marked "(pbpctrl)" come from pbpctrl's unit
+tests under the same license.
+
+The pw_rpc packet layout (pbpctrl's proto/pw.rpc.packet.proto) originates
+from the Pigweed project, Copyright 2020 The Pigweed Authors, licensed under
+the Apache License, Version 2.0.
+
+The connection approach (a client-role BlueZ Profile1 for the Maestro UUID,
+then Device1.ConnectProfile) and the Pixel Buds Pro 2 device class constant
+follow pbpctrl's cli/src/bt.rs.
