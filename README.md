@@ -87,10 +87,11 @@ right below the listening modes in the popup):
 How it works: the buds report on/off-head through their Maestro "OOBE
 actions" stream, but only as a snapshot when that stream is subscribed, not
 as a live event. So while the option is on and the buds are connected, the
-bridge re-subscribes about once a second and the plugin reacts within about
-a second. Some removals make the buds drop their control link for a moment;
-the bridge then reconnects and the first snapshot of the new session is
-compared with the last known state, which takes about two seconds in total.
+bridge re-subscribes about once a second, and the plugin typically reacts
+within one to two seconds. Some removals make the buds drop their control
+link for a moment; the plugin then reconnects and compares the first
+snapshot of the new session with the last known state, so those take a few
+seconds.
 
 It relies on the buds' own on-head detection: if **On-head detection** is
 turned off under Advanced, the checkbox is disabled and says so. Unchecking
