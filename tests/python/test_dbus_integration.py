@@ -208,10 +208,17 @@ class BridgeOverPrivateBus(unittest.TestCase):
 
     def test_stream_probe_is_passive(self):
         probe = os.path.join(REPO, "tests", "stream-probe.py")
-        proc = subprocess.run(["/usr/bin/python3", "-I", "-B", probe, "--yes-real-hardware", "--seconds", "1.5"],
-                              env=self.env, capture_output=True, timeout=20)
-        out = proc.stdout.decode()
-        self.assertEqual(proc.returncode, 0, out + proc.stderr.decode())
+        proc = subprocess.Popen(["/usr/bin/python3", "-I", "-B", probe, "--yes-real-hardware", "--seconds", "2.5"],
+                                env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.addCleanup(self._kill, proc)
+        time.sleep(1.2)
+        self.control("EmitMediaProps")
+        stdout, stderr = proc.communicate(timeout=20)
+        proc.stdout, proc.stderr = None, None
+        out = stdout.decode()
+        proc.stdout = None
+        self.assertEqual(proc.returncode, 0, out + stderr.decode())
+        self.assertIn("bluez /player0 org.freedesktop.DBus.Properties.PropertiesChanged ('org.bluez.MediaPlayer1', {'Status': 'paused'}, [])", out)
         self.assertIn("gfps Device(0x03) ModelId(0x01) len=3 hex=123456", out)
         self.assertIn("gfps Device(0x03) BatteryInfo(0x03) len=3 hex=5ad5ff batteries=[90%, 85% charging, unknown]", out)
         self.assertIn("gsnd group=0x04 code=0x05 WearState len=2 hex=0806 wear=both worn", out)

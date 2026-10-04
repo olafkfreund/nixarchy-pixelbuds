@@ -51,6 +51,7 @@ XML = """
   </interface>
   <interface name="test.Control">
     <method name="Disconnect"/>
+    <method name="EmitMediaProps"/>
     <method name="RequestDisconnection"/>
     <method name="Stats"><arg type="a{si}" direction="out"/></method>
   </interface>
@@ -144,6 +145,11 @@ def main():
             bus.emit_signal(None, DEV, "org.freedesktop.DBus.Properties", "PropertiesChanged",
                             GLib.Variant("(sa{sv}as)", ("org.bluez.Device1",
                                                         {"Connected": GLib.Variant("b", False)}, [])))
+            inv.return_value(None)
+        elif method == "EmitMediaProps":
+            bus.emit_signal(None, DEV + "/player0", "org.freedesktop.DBus.Properties", "PropertiesChanged",
+                            GLib.Variant("(sa{sv}as)", ("org.bluez.MediaPlayer1",
+                                                        {"Status": GLib.Variant("s", "paused")}, [])))
             inv.return_value(None)
         elif method == "RequestDisconnection":
             owner, ppath, _ = state["profile"]

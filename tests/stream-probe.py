@@ -24,9 +24,16 @@ captures (03 none worn, 04/05 one worn, 06 both worn, 01 in-ear detection
 off). Ends after --seconds, on Ctrl-C, or when the buds disconnect; the
 sockets are released on exit.
 
+It also logs, read-only, every D-Bus signal BlueZ emits under the buds'
+object path (property changes of Device1, MediaControl1, MediaPlayer1,
+MediaTransport1 and so on), so a press-and-hold shows up if BlueZ sees
+anything. HFP AT commands (e.g. AT+BVRA) are handled inside PipeWire and are
+not visible here.
+
 Suggested run: music playing, in-ear detection on. Wait 10 s, take one bud
 out, wait 10 s, put it back, wait 10 s; repeat with the other bud; take both
-out; dock one in the case.
+out; dock one in the case. Then, with the right bud's hold action set to
+the assistant, press and hold the right bud for ~3 s and release; repeat.
 """
 import importlib.util
 import os
@@ -98,6 +105,21 @@ def describe(stream, group, code, data):
     return "gfps %s(0x%02X) %s(0x%02X) len=%d hex=%s%s" % (
         GROUPS.get(group, "Unknown"), group, CODES.get(group, {}).get(code, "Unknown"), code,
         len(data), data.hex(), extra)
+
+
+def watch_bluez(bluez, device, say):
+    """Log every org.bluez signal under the device path. Read-only."""
+    def on_signal(_conn, _sender, path, iface, signal, params):
+        if path != device.path and not path.startswith(device.path + "/"):
+            return
+        try:
+            args = repr(params.unpack())
+        except Exception:
+            args = "?"
+        say("bluez %s %s.%s %s" % (path[len(device.path):] or "/", iface, signal, args[:400]))
+
+    bluez._invoke(lambda: bluez.bus.signal_subscribe(
+        "org.bluez", None, None, None, None, bluez.Gio.DBusSignalFlags.NONE, on_signal))
 
 
 class Stream:
@@ -184,6 +206,10 @@ def main(argv):
                 say("%s: not opened: %s %s" % (st.name, stop.reason, stop.detail))
                 if stop.reason in ("terminated", "disconnected"):
                     return 0
+        watcher = next((st.bluez for st in streams if st.bluez.thread is not None), None)
+        if watcher is not None:
+            watch_bluez(watcher, device, say)
+            say("bluez: logging signals under %s" % device.path)
         live = [st for st in streams if st.sock is not None]
         say("listening for %.0f s on %s" % (seconds, ", ".join(st.name for st in live) or "nothing"))
         end = time.monotonic() + seconds
