@@ -17,6 +17,7 @@ Panel {
   manageIpc: false
 
   property bool advancedOpen: false
+  property bool eqOpen: false
   property int ancIndex: 1
   property bool cursorActive: false
 
@@ -261,6 +262,7 @@ Panel {
       ancIndex = root.ancModeIndex(root.anc)
       cursorActive = false
       advancedOpen = false
+      eqOpen = false
     }
   }
   onConnectedChanged: {
@@ -543,9 +545,107 @@ Panel {
               }
             }
           }
+
+          // Ear detection: pause media when a bud comes out, resume when both
+          // are back (Service.qml). Needs the buds' own on-head detection.
+          Toggle {
+            width: parent.width
+            label: "Pause when a bud is removed"
+            checked: root.svc ? root.svc.autoPause : true
+            enabled: !!root.svc && !root.svc.ohdOff && root.svc.ready
+            opacity: enabled ? 1.0 : 0.5
+            foreground: root.fg
+            fontFamily: root.fontFamily
+            titleSize: Style.font.bodySmall
+            onClicked: if (root.svc) root.svc.setAutoPause(!root.svc.autoPause)
+          }
+
+          Text {
+            textFormat: Text.PlainText
+            visible: !!root.svc && root.svc.ohdOff
+            width: parent.width
+            wrapMode: Text.WordWrap
+            text: "On-head detection is off in Advanced."
+            color: Qt.darker(root.fg, 1.4)
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+          }
         }
 
-        // ---------- Advanced (collapsed): device toggles + sound ----------
+        // ---------- EQ (collapsed): sound tuning ----------
+        PanelSeparator { foreground: root.fg }
+
+        Item {
+          id: eqHeader
+          width: parent.width
+          implicitHeight: eqLabel.implicitHeight + Style.space(4)
+
+          Text {
+            id: eqLabel
+            textFormat: Text.PlainText
+            text: (root.eqOpen ? "▾" : "▸") + "  EQ"
+            color: Qt.darker(root.fg, 1.4)
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            font.bold: true
+            font.letterSpacing: 1.2
+            anchors.verticalCenter: parent.verticalCenter
+          }
+
+          MouseArea {
+            anchors.fill: parent
+            cursorShape: Qt.PointingHandCursor
+            onClicked: {
+              root.eqOpen = !root.eqOpen
+              if (root.eqOpen && !(root.svc && root.svc.controlsRead)) root.refreshControls()
+            }
+          }
+        }
+
+        Column {
+          visible: root.eqOpen
+          width: parent.width
+          spacing: Style.space(6)
+
+          Text {
+            textFormat: Text.PlainText
+            visible: root.controls.ctl_volume_eq === undefined && root.controls.ctl_mono === undefined
+                && root.controls.ctl_balance === undefined && root.controls.ctl_eq === undefined
+            width: parent.width
+            text: root.svc && root.svc.readingControls ? "Reading device settings…" : "The buds reported no sound settings."
+            color: Qt.darker(root.fg, 1.4)
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.bodySmall
+          }
+
+          ToggleRow { label: "Volume EQ"; ctlKey: "volume-eq"; statusKey: "ctl_volume_eq" }
+          ToggleRow { label: "Mono audio"; ctlKey: "mono"; statusKey: "ctl_mono" }
+
+          SliderRow {
+            label: "Balance"
+            visible: root.controls.ctl_balance !== undefined
+            from: -100; to: 100; step: 5
+            value: Math.max(-100, Math.min(100, parseInt(root.controls.ctl_balance) || 0))
+            format: function(v) { return v === 0 ? "center" : (v < 0 ? "L " + (-v) : "R " + v) }
+            onCommitted: function(v) { root.setControl("balance", { value: Math.round(v) }) }
+          }
+
+          Repeater {
+            model: ["Low bass", "Bass", "Mid", "Treble", "Upper treble"]
+            SliderRow {
+              required property var modelData
+              required property int index
+              label: modelData
+              visible: root.eqBands.length === 5
+              from: -6; to: 6; step: 0.5
+              value: root.eqBands.length === 5 ? root.eqBands[index] : 0
+              format: function(v) { return v.toFixed(1) }
+              onCommitted: function(v) { root.setEqBand(index, v) }
+            }
+          }
+        }
+
+        // ---------- Advanced (collapsed): device toggles + touch controls ----------
         PanelSeparator { visible: advancedHeader.visible; foreground: root.fg }
 
         Item {
@@ -571,7 +671,7 @@ Panel {
             cursorShape: Qt.PointingHandCursor
             onClicked: {
               root.advancedOpen = !root.advancedOpen
-              if (root.advancedOpen && Object.keys(root.controls).length === 0) root.refreshControls()
+              if (root.advancedOpen && !(root.svc && root.svc.controlsRead)) root.refreshControls()
             }
           }
         }
@@ -584,9 +684,10 @@ Panel {
           Text {
 
             textFormat: Text.PlainText
-            visible: Object.keys(root.controls).length === 0
+            visible: !(root.svc && root.svc.controlsRead) || Object.keys(root.controls).length === 0
             width: parent.width
-            text: root.svc && root.svc.readingControls ? "Reading device settings…" : "The buds reported no adjustable settings."
+            text: root.svc && root.svc.readingControls ? "Reading device settings…"
+                : root.svc && root.svc.controlsRead ? "The buds reported no adjustable settings." : ""
             color: Qt.darker(root.fg, 1.4)
             font.family: root.fontFamily
             font.pixelSize: Style.font.bodySmall
@@ -647,41 +748,6 @@ Panel {
             }
           }
 
-          PanelSectionHeader {
-            visible: root.controls.ctl_volume_eq !== undefined
-                || root.controls.ctl_mono !== undefined
-                || root.controls.ctl_balance !== undefined
-                || root.controls.ctl_eq !== undefined
-            text: "SOUND"
-            foreground: root.fg
-            fontFamily: root.fontFamily
-          }
-
-          ToggleRow { label: "Volume EQ"; ctlKey: "volume-eq"; statusKey: "ctl_volume_eq" }
-          ToggleRow { label: "Mono audio"; ctlKey: "mono"; statusKey: "ctl_mono" }
-
-          SliderRow {
-            label: "Balance"
-            visible: root.controls.ctl_balance !== undefined
-            from: -100; to: 100; step: 5
-            value: Math.max(-100, Math.min(100, parseInt(root.controls.ctl_balance) || 0))
-            format: function(v) { return v === 0 ? "center" : (v < 0 ? "L " + (-v) : "R " + v) }
-            onCommitted: function(v) { root.setControl("balance", { value: Math.round(v) }) }
-          }
-
-          Repeater {
-            model: ["Low bass", "Bass", "Mid", "Treble", "Upper treble"]
-            SliderRow {
-              required property var modelData
-              required property int index
-              label: modelData
-              visible: root.eqBands.length === 5
-              from: -6; to: 6; step: 0.5
-              value: root.eqBands.length === 5 ? root.eqBands[index] : 0
-              format: function(v) { return v.toFixed(1) }
-              onCommitted: function(v) { root.setEqBand(index, v) }
-            }
-          }
         }
 
         Text {
