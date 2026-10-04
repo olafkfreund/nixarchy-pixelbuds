@@ -1,8 +1,37 @@
 # Pixel Buds for Omarchy
 
 Pixel Buds battery and listening-mode control, right in the Omarchy bar.
+Omarchy-native: everything it needs ships with a stock Omarchy install, so
+there is nothing else to install or build.
 
 ![screenshot](preview.png)
+
+## What's new in 2.0
+
+2.0 rewrites how the plugin talks to the buds. Earlier versions drove the
+`pbpctrl` command-line tool (from the AUR), starting a new process and a new
+Bluetooth connection for every reading. 2.0 speaks the buds' protocol itself
+through a small bundled Python bridge that keeps one connection open while the
+buds are connected, so the buds push battery and setting changes as they
+happen.
+
+- **No pbpctrl needed.** It is no longer used; you can uninstall it if nothing
+  else needs it.
+- **New EQ section**: the 5-band EQ, balance, volume EQ and mono audio now
+  have their own collapsible section.
+- **Mouse-over hints** explain every EQ and Advanced control.
+- **Phone-only controls removed**: on-head detection, volume level alerts and
+  the Assistant hold only work with the Pixel Buds app on a phone, so they no
+  longer appear in the panel.
+- **Renamed buds are found**: detection uses the buds' Maestro service, not
+  their Bluetooth name.
+
+Upgrading from 1.x:
+
+```bash
+omarchy plugin update io.github.rdoupe.pixelbuds
+omarchy restart shell
+```
 
 ## Features
 
@@ -39,7 +68,8 @@ thing.
 
 ## Requirements
 
-Nothing beyond a standard Omarchy install:
+Nothing beyond a standard Omarchy install. Everything below is already part
+of Omarchy's base packages:
 
 - `python3` with its PyGObject (`python-gobject`) bindings, BlueZ, and
   glib2's `gdbus` — all part of Omarchy's base packages.
