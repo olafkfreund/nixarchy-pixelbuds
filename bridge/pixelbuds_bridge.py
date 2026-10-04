@@ -523,7 +523,8 @@ class BluezGio:
         Gio = self.Gio
         dev_path = self.device.path
         node = Gio.DBusNodeInfo.new_for_xml(PROFILE_XML)
-        self.bus.register_object(self.profile_path, node.interfaces[0], self._on_method, None, None)
+        register = getattr(self.bus, "register_object_with_closures2", None) or self.bus.register_object
+        register(self.profile_path, node.interfaces[0], self._on_method, None, None)
 
         def on_props(_conn, _sender, _path, _iface, _signal, params):
             iface, changed, _invalid = params.unpack()
