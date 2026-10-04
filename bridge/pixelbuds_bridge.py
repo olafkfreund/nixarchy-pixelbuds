@@ -999,7 +999,10 @@ def connect(bluez, device, link, hub):
     last = "connect failed"
     for attempt in range(CONNECT_TRIES):
         hub.check()
-        connected, resolved = bluez.device_state(device.path)
+        try:
+            connected, resolved = bluez.device_state(device.path)
+        except Exception:
+            raise Stop("disconnected")        # the device object is gone
         if not connected:
             raise Stop("disconnected")
         if not resolved:
@@ -1072,7 +1075,12 @@ def main(argv=None, make_bluez=BluezGio, stdin_fd=0, stdout=None):
             raise Stop("busy")
         except (LockError, OSError):
             raise Stop("error", "runtime lock is unsafe")
-        bluez.start(device, link)
+        try:
+            bluez.start(device, link)
+        except Stop:
+            raise
+        except Exception:
+            raise Stop("error", "BlueZ refused the Maestro profile")
         sock = connect(bluez, device, link, hub)
         hub.sock = sock
         try:
@@ -1082,6 +1090,8 @@ def main(argv=None, make_bluez=BluezGio, stdin_fd=0, stdout=None):
             raise Stop("link_lost", str(error))
     except Stop as stop:
         reason, detail = stop.reason, stop.detail
+    except Exception:
+        reason, detail = "error", "internal error"
     finally:
         if sock is not None:
             try:

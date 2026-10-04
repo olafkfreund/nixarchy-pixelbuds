@@ -445,6 +445,23 @@ class MainLifecycle(EnvCase):
         self.assertEqual(fake.connect_calls, 0)
 
 
+    def test_dbus_errors_become_bye_not_traceback(self):
+        class Refusing(FakeBluez):
+            def start(self, device, link):
+                raise RuntimeError("org.bluez.Error.NotPermitted")
+        fake = Refusing()
+        code, out = self.run_main(fake, close_after=2.0)
+        self.assertEqual(out.events()[-1]["reason"], "error")
+
+        class Vanishing(FakeBluez):
+            def device_state(self, path):
+                raise RuntimeError("UnknownObject")
+        fake = Vanishing()
+        code, out = self.run_main(fake, close_after=2.0)
+        self.assertEqual(out.events()[-1]["reason"], "disconnected")
+        self.assertEqual(fake.connect_calls, 0)
+
+
 class RuntimeLock(EnvCase):
     def lock_path(self):
         return os.path.join(self.runtime, "omarchy-pixelbuds", "maestro.lock")
