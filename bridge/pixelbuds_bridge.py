@@ -610,6 +610,87 @@ class BluezGio:
 # Session: device state and command handling
 # --------------------------------------------------------------------------
 
+class HeadSource:
+    """Where on/off-head reports come from. A source feeds the session through
+    session.report_head() and session.emit_head(). `due`/`step` let a polling
+    source run from the idle loop; a push source would return False from
+    due() and report from its stream handler instead. Swapping sources
+    changes nothing else in the session or the widget."""
+
+    def __init__(self, session):
+        self.session = session
+
+    def due(self, now):
+        return False
+
+    def next_due(self):
+        return float("inf")
+
+    def step(self):
+        pass
+
+    def on_oobe(self, action):
+        pass
+
+    def stop(self):
+        pass
+
+
+class OobePollSource(HeadSource):
+    """Fallback source. The buds report on/off-head only as a snapshot when
+    the OOBE action stream is (re)subscribed, never live, so re-ask about
+    once a second from the idle loop. Each ask is one cancel + one request
+    and waits at most WINDOW for the snapshot; pending stdin commands cut
+    the wait short, so commands are never starved."""
+
+    INTERVAL = 1.0
+    WINDOW = 0.4
+
+    def __init__(self, session):
+        super().__init__(session)
+        self.next_at = 0.0
+        self.seen = None             # sides reported during the current ask
+        self.asks = 0
+
+    def due(self, now):
+        return now >= self.next_at
+
+    def next_due(self):
+        return self.next_at
+
+    def on_oobe(self, action):
+        head = maestro.HEAD_ACTIONS.get(action)
+        if head is None:
+            return
+        self.session.report_head(*head)
+        if self.seen is not None:
+            self.seen.add(head[0])   # ask in progress: emit at its end
+        else:
+            self.session.emit_head()
+
+    def step(self):
+        s = self.session
+        self.asks += 1
+        self.seen = set()
+        try:
+            s.client.subscribe(maestro.M_SUB_OOBE)
+            deadline = s.clock() + self.WINDOW
+            while len(self.seen) < 2 and s.clock() < deadline and not s.hub.reader.lines:
+                s.client.poll(deadline)
+        except maestro.RpcError:
+            pass
+        finally:
+            self.seen = None
+            self.next_at = s.clock() + self.INTERVAL
+        s.emit_head()
+
+    def stop(self):
+        client = self.session.client
+        for uid, method in list(client.streams.items()):
+            if method == maestro.M_SUB_OOBE:
+                client.cancel(uid)
+
+
 class Session:
     def __init__(self, emitter, hub, device, cache=None, clock=time.monotonic, wall=time.time,
                  prefs=None):
@@ -629,15 +710,11 @@ class Session:
         self.error = ""
         self.last_state = None
         self.queue = collections.deque()
-        # Ear detection. The buds report on/off-head only as a snapshot when
-        # the OOBE action stream is (re)subscribed, so while the watch is on
-        # the idle loop re-asks about once a second.
-        self.head_watch = False
+        # Ear detection: the latest per-side report, from whichever source
+        # is active (see HeadSource). None = not running.
+        self.head_source = None
         self.head = {"left": None, "right": None}
         self.head_emitted = None
-        self.head_next = 0.0
-        self.head_seen = None          # sides reported during the current ask
-        self.head_asks = 0
 
     # ---- state ----
     @property
@@ -712,15 +789,8 @@ class Session:
                 self.runtime_at = self.clock()
                 self.emit_state()
             elif method == maestro.M_SUB_OOBE:
-                head = maestro.HEAD_ACTIONS.get(maestro.decode_oobe_action(payload))
-                if head is None or not self.head_watch:
-                    return
-                side, on = head
-                self.head[side] = on
-                if self.head_seen is not None:
-                    self.head_seen.add(side)     # ask in progress: emit at its end
-                else:
-                    self.emit_head()
+                if self.head_source is not None:
+                    self.head_source.on_oobe(maestro.decode_oobe_action(payload))
             elif method == maestro.M_SUB_SETTINGS:
                 decoded = maestro.decode_setting_value(payload)
                 if decoded is None:
@@ -820,17 +890,20 @@ class Session:
                     self.result(cmd, False, str(error))
                 continue
             now = self.clock()
-            if self.head_watch and now >= self.head_next:
-                self.ask_head()
+            src = self.head_source
+            if src is not None and src.due(now):
+                src.step()
                 continue
             deadline = now + 60.0
-            if self.head_watch:
-                deadline = min(deadline, self.head_next)
+            if src is not None:
+                deadline = min(deadline, src.next_due())
             self.client.poll(deadline)
 
     # ---- ear detection ----
-    HEAD_INTERVAL = 1.0      # seconds between snapshot requests
-    HEAD_WINDOW = 0.4        # how long one snapshot may take to arrive
+    def report_head(self, side, on):
+        """Called by a head source with one side's on-head state."""
+        if side in self.head and isinstance(on, bool):
+            self.head[side] = on
 
     def emit_head(self):
         if self.head["left"] is None or self.head["right"] is None:
@@ -840,34 +913,15 @@ class Session:
             self.head_emitted = now
             self.emitter.emit({"type": "head", "left": now[0], "right": now[1]})
 
-    def ask_head(self):
-        """Re-subscribe to the OOBE stream and collect its snapshot. Bounded
-        to HEAD_WINDOW; stdin commands are picked up right after."""
-        self.head_asks += 1
-        self.head_seen = set()
-        try:
-            self.client.subscribe(maestro.M_SUB_OOBE)
-            deadline = self.clock() + self.HEAD_WINDOW
-            while len(self.head_seen) < 2 and self.clock() < deadline and not self.hub.reader.lines:
-                self.client.poll(deadline)
-        except maestro.RpcError:
-            pass
-        finally:
-            self.head_seen = None
-            self.head_next = self.clock() + self.HEAD_INTERVAL
-        self.emit_head()
-
     def set_head_watch(self, on):
-        if on == self.head_watch:
+        if on == (self.head_source is not None):
             return
-        self.head_watch = on
         if on:
-            self.head_next = 0.0
-            self.head_emitted = None     # report once when (re)enabled
+            self.head_emitted = None            # report once when (re)enabled
+            self.head_source = OobePollSource(self)
         else:
-            for uid, method in list(self.client.streams.items()):
-                if method == maestro.M_SUB_OOBE:
-                    self.client.cancel(uid)
+            self.head_source.stop()
+            self.head_source = None
             self.head = {"left": None, "right": None}
             self.head_emitted = None
 
