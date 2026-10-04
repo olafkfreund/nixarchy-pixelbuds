@@ -53,6 +53,9 @@ grep -q 'Model.splitLines' "$service" || fail "bridge stdout must pass the line 
 grep -q 'function splitLines' "$model" || fail "Model.js missing bounded line splitter"
 grep -q 'Model.sanitizeStatus' "$service" || fail "status must be sanitized in QML"
 grep -q 'Model.sanitizeControls' "$service" || fail "controls must be sanitized in QML"
+# Auto-pause is in-process MPRIS only; never an external media tool.
+! grep -qE 'playerctl|dbus-send|busctl' "$service" "$panel" || fail "auto-pause must not spawn media tools"
+grep -q 'import Quickshell.Services.Mpris' "$service" || fail "auto-pause must use Quickshell MPRIS"
 
 # Every Text element is PlainText (device names are device-controlled).
 for f in "$panel"; do

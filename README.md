@@ -17,13 +17,17 @@ Pixel Buds battery and listening-mode control, right in the Omarchy bar.
   buds themselves.
 - **Shared volume and swipe OSD**: shows the buds' native Bluetooth absolute
   volume and summons Omarchy's volume OSD when either bud changes it.
+- **Ear detection**: take a bud out (or dock it) and whatever is playing
+  pauses; put both back in and it resumes — the way Pixel Buds behave on
+  Android. On by default; see [Ear detection](#ear-detection).
 - **Device toggles**: multipoint audio, speech detection (auto-transparency
   while you talk), on-head detection, and volume level alerts. Rows are
   capability-gated — a control only appears if your buds answer for it.
 - **Touch controls**: enable/disable gestures, choose ANC or Assistant for
   each bud's hold action, and select the listening modes that hold cycles.
-- **Advanced sound**, tucked behind a collapsed section: volume-dependent EQ,
-  mono audio, balance, and the 5-band EQ.
+- **EQ**, a collapsed section of its own: the 5-band EQ, balance,
+  volume-dependent EQ and mono audio. Device toggles and touch controls live
+  in the collapsed **Advanced** section below it.
 - **Low battery** turns a battery row the urgent color at 20% or less.
 - **Event-driven**: subscribes to BlueZ D-Bus signals via `gdbus`, so the icon
   appears within about a second of the buds connecting; battery and mode
@@ -58,9 +62,40 @@ omarchy plugin remove io.github.rdoupe.pixelbuds
 ```
 
 Outside the plugin directory the plugin writes only the cached case-battery
-reading at `${XDG_STATE_HOME:-~/.local/state}/omarchy-pixelbuds/case` and a
-session lock file under `$XDG_RUNTIME_DIR/omarchy-pixelbuds/`; both can be
-deleted freely.
+reading at `${XDG_STATE_HOME:-~/.local/state}/omarchy-pixelbuds/case`, your
+ear-detection choice at `${XDG_STATE_HOME:-~/.local/state}/omarchy-pixelbuds/prefs`
+(only once you change it), and a session lock file under
+`$XDG_RUNTIME_DIR/omarchy-pixelbuds/`; all can be deleted freely (a missing
+`prefs` file means ear detection is on).
+
+## Ear detection
+
+With **Pause when a bud is removed** checked (the default; the checkbox sits
+right below the listening modes in the popup):
+
+- when either bud leaves your ear, or is put into the case, every media
+  player that is playing is paused (through MPRIS, inside the shell; no
+  external tool is run);
+- when both buds are back in, the plugin resumes only the players it paused,
+  and only if they still exist and are still paused. If you play or stop one
+  of them yourself in the meantime, it is left alone; the plugin also forgets
+  them when the buds disconnect, when you uncheck the option, or after 10
+  minutes;
+- it acts only while these buds are the default audio output, so speakers
+  are never paused.
+
+How it works: the buds report on/off-head through their Maestro "OOBE
+actions" stream, but only as a snapshot when that stream is subscribed, not
+as a live event. So while the option is on and the buds are connected, the
+bridge re-subscribes about once a second and the plugin reacts within about
+a second. Some removals make the buds drop their control link for a moment;
+the bridge then reconnects and the first snapshot of the new session is
+compared with the last known state, which takes about two seconds in total.
+
+It relies on the buds' own on-head detection: if **On-head detection** is
+turned off under Advanced, the checkbox is disabled and says so. Unchecking
+the box turns all of this off — no on-head polling and no pausing — and the
+choice is remembered.
 
 ## Settings
 
@@ -143,7 +178,10 @@ Bluetooth hardware or touches the system bus.
 
 `tests/hardware-smoke.py --yes-real-hardware [--write]` exercises a real,
 connected pair: read-only by default, `--write` adds one listening-mode round
-trip that restores the original mode.
+trip that restores the original mode. `tests/stream-probe.py
+--yes-real-hardware` is a passive research tool: it listens, sending nothing,
+on the buds' Fast Pair message stream and "GSND CONTROL" channel and prints
+what arrives; the plugin itself does not open either.
 
 ## Credits
 
@@ -151,7 +189,10 @@ The Maestro protocol layer in `bridge/maestro.py` is ported from
 [pbpctrl](https://github.com/qzed/pbpctrl) by Maximilian Luz (Apache-2.0); see
 [NOTICE](NOTICE). [pixelbuds-plugin-kde](https://github.com/thek0d3r/pixelbuds-plugin-kde)
 served as an independent cross-check of the protocol; no code was taken from
-it.
+it. Facts about the buds' GSND CONTROL channel used by the research probe
+come from the published captures of
+[opencontrolpixelbudspro2](https://github.com/tedsluis/opencontrolpixelbudspro2)
+(AGPL-3.0); no code was taken from it.
 
 ## License
 
