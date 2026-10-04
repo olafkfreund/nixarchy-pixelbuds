@@ -180,13 +180,14 @@ Item {
 
   function refresh() {
     if (!bridge.running) {
-      if (connected && !restartTimer.running) ensureBridge()
+      // Respect the retry limit: after five failed sessions only a new
+      // BlueZ connect event (which resets _failures) starts the bridge.
+      if (connected && !restartTimer.running && _failures <= 5) ensureBridge()
       return
     }
     var now = Date.now()
     if (now - _lastRefresh < 2000) return    // several bars poll; one read is enough
-    _lastRefresh = now
-    send({ cmd: "refresh" })
+    if (send({ cmd: "refresh" })) _lastRefresh = now
   }
 
   function refreshControls() {

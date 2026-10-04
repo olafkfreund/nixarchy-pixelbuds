@@ -1039,8 +1039,10 @@ def main(argv=None, make_bluez=BluezGio, stdin_fd=0, stdout=None):
     link = Link(wake_w)
 
     def on_signal(_signum, _frame):
+        # Only set the flag: the handler runs between bytecodes of the main
+        # thread, which may be holding link.lock. set_wakeup_fd wakes the
+        # hub, and Hub.check() turns the flag into an orderly shutdown.
         terminate.set()
-        link.set_gone("terminated")
 
     previous = {sig: signal.signal(sig, on_signal)
                 for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)}
