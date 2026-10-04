@@ -130,8 +130,9 @@ Item {
       if (!handleLine(split.lines[i])) { split.overflow = true; break }
     }
     if (split.overflow) {
+      // Protocol violation: stop the session and drop whatever it said.
       _buf = ""
-      stopBridge()
+      abort()
     }
   }
 
