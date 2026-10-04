@@ -104,26 +104,6 @@ function retryDelay(failures) {
   return delays[Math.max(0, Math.min(delays.length - 1, failures - 1))]
 }
 
-// Ear detection. A bud counts as worn when the buds report it on-head and it
-// is not docked in the case. Returns null until the buds have reported.
-function worn(head, status) {
-  if (!head || typeof head.left !== "boolean" || typeof head.right !== "boolean") return null
-  return {
-    left: head.left && String(status.left_in_case) !== "1",
-    right: head.right && String(status.right_in_case) !== "1"
-  }
-}
-
-// "off" when either bud went from worn to not worn, "on" when both are worn
-// again after they were not, "" otherwise (including the very first report,
-// so a session start never pauses or resumes anything).
-function headTransition(prev, cur) {
-  if (!prev || !cur) return ""
-  if ((prev.left && !cur.left) || (prev.right && !cur.right)) return "off"
-  if (cur.left && cur.right && !(prev.left && prev.right)) return "on"
-  return ""
-}
-
 function ancLabel(mode) {
   switch (String(mode || "")) {
     case "off": return "Off"

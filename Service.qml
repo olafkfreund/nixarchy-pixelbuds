@@ -1,8 +1,6 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
-import Quickshell.Services.Mpris
-import Quickshell.Services.Pipewire
 import "Model.js" as Model
 
 // One instance per shell (manifest kind "service"), shared by the bar widget
@@ -37,27 +35,9 @@ Item {
   property string pendingAnc: ""
   property bool ready: false
   property bool readingControls: false
-  property bool controlsRead: false     // a full controls read completed this session
   readonly property bool connected: String(status.connected || "0") === "1"
   readonly property bool adaptiveSupported: String(status.adaptive_supported || "0") === "1"
   readonly property var ancModes: adaptiveSupported ? Model.ANC_MODES : Model.LEGACY_ANC_MODES
-
-  // ---- ear detection / auto-pause ----
-  // The user's choice (persisted by the bridge in the plugin's state dir;
-  // default on, like Pixel Buds on Android). Off = no head watch, no pausing.
-  property bool autoPause: true
-  readonly property bool ohdOff: controls.ctl_ohd === "false"
-  readonly property bool headWatchWanted: autoPause && !ohdOff
-  // Last on/off-head report. Kept across a bridge restart after a dropped
-  // link, so the new session's first snapshot is compared with it.
-  property var head: null
-  property var lastWorn: null
-  property var pausedPlayers: []
-  property bool _headWatchSent: false
-  // Act only when these buds are the default output: never pause speakers.
-  readonly property var audioSink: Pipewire.defaultAudioSink
-  readonly property bool budsAreOutput: connected && !!audioSink && !!status.addr
-      && String(audioSink.name || "").indexOf(String(status.addr).replace(/:/g, "_")) >= 0
 
   property string _buf: ""
   property int _nextId: 1
@@ -93,7 +73,6 @@ Item {
     _buf = ""
     _byeReason = ""
     ready = false
-    controlsRead = false
     bridge.environment = root.launchEnvironment()
     bridge.running = true
   }
@@ -117,13 +96,6 @@ Item {
     stopBridge()
     status = ({})
     controls = ({})
-    forgetHead()
-  }
-
-  function forgetHead() {
-    head = null
-    lastWorn = null
-    forgetPaused()
   }
 
   function onBridgeExit(code) {
@@ -133,7 +105,6 @@ Item {
     ready = false
     readingControls = false
     pendingAnc = ""
-    _headWatchSent = false
     if (stopped) return
     var reason = _byeReason !== "" ? _byeReason : (code === 0 ? "stdin_closed" : "crashed")
     if (Model.retryable(reason) && connected) {
@@ -150,7 +121,6 @@ Item {
     // absent / not_ready / disconnected: wait for the next BlueZ event.
     status = ({})
     controls = ({})
-    forgetHead()
   }
 
   function onChunk(chunk) {
@@ -183,22 +153,10 @@ Item {
       case "ready":
         ready = true
         _failures = 0
-        syncHeadWatch()
-        return true
-      case "prefs":
-        if (typeof ev.auto_pause === "boolean") autoPause = ev.auto_pause
-        return true
-      case "head":
-        if (typeof ev.left !== "boolean" || typeof ev.right !== "boolean") return false
-        head = { left: ev.left, right: ev.right }
-        evaluateHead()
         return true
       case "result":
         if (ev.cmd === "set_anc" || ev.cmd === "cycle_anc") { if (ev.ok !== true) pendingAnc = "" }
-        if (ev.cmd === "controls") {
-          readingControls = false
-          if (ev.ok === true) controlsRead = true
-        }
+        if (ev.cmd === "controls") readingControls = false
         return true
       case "bye":
         _byeReason = typeof ev.reason === "string" ? ev.reason.substring(0, 32) : "error"
@@ -216,100 +174,6 @@ Item {
     _nextId = _nextId >= 2147483646 ? 1 : _nextId + 1
     bridge.write(JSON.stringify(cmd) + "\n")
     return true
-  }
-
-  // ---- ear detection ----
-
-  function syncHeadWatch() {
-    if (!ready) return
-    if (headWatchWanted === _headWatchSent) return
-    if (send({ cmd: "head_watch", on: headWatchWanted })) _headWatchSent = headWatchWanted
-    if (!headWatchWanted) forgetHead()
-  }
-  onHeadWatchWantedChanged: syncHeadWatch()
-
-  // Android semantics: either bud leaving the ear (or going into the case)
-  // pauses what is playing; both back in resumes what we paused.
-  function evaluateHead() {
-    if (!headWatchWanted) return
-    var cur = Model.worn(head, status)
-    if (cur === null) return
-    var change = Model.headTransition(lastWorn, cur)
-    lastWorn = cur
-    if (change === "off") pausePlaying()
-    else if (change === "on") resumePaused()
-  }
-  onStatusChanged: evaluateHead()
-
-  function livePlayers() {
-    return Mpris.players ? Mpris.players.values : []
-  }
-
-  function pausePlaying() {
-    if (!autoPause || !budsAreOutput) return
-    var list = livePlayers()
-    var paused = pausedPlayers.slice()
-    for (var i = 0; i < list.length; i++) {
-      var p = list[i]
-      if (!p || !p.isPlaying || !p.canPause) continue
-      p.pause()
-      if (paused.indexOf(p) < 0) paused.push(p)
-    }
-    pausedPlayers = paused
-    if (paused.length > 0) pauseExpiry.restart()
-  }
-
-  function resumePaused() {
-    var list = pausedPlayers
-    forgetPaused()
-    if (!autoPause || !budsAreOutput) return
-    var live = livePlayers()
-    for (var i = 0; i < list.length; i++) {
-      var p = list[i]
-      // Only players that still exist and are still paused by us.
-      if (live.indexOf(p) < 0 || p.playbackState !== MprisPlaybackState.Paused || !p.canPlay) continue
-      p.play()
-    }
-  }
-
-  function forgetPaused() {
-    pauseExpiry.stop()
-    if (pausedPlayers.length > 0) pausedPlayers = []
-  }
-
-  function dropPlayer(p) {
-    var i = pausedPlayers.indexOf(p)
-    if (i < 0) return
-    var next = pausedPlayers.slice()
-    next.splice(i, 1)
-    pausedPlayers = next
-  }
-
-  // The user took over (played or stopped it themselves): never resume it.
-  Instantiator {
-    model: root.pausedPlayers
-    delegate: Connections {
-      required property var modelData
-      target: modelData
-      function onPlaybackStateChanged() {
-        if (modelData.playbackState !== MprisPlaybackState.Paused) root.dropPlayer(modelData)
-      }
-    }
-  }
-
-  Timer {
-    id: pauseExpiry
-    interval: 10 * 60 * 1000
-    onTriggered: root.forgetPaused()
-  }
-
-  PwObjectTracker { objects: root.audioSink ? [root.audioSink] : [] }
-
-  function setAutoPause(on) {
-    on = on === true
-    if (on === autoPause) return
-    if (!send({ cmd: "set_pref", key: "auto_pause", value: on })) return
-    autoPause = on
   }
 
   // ---- API used by Panel.qml ----

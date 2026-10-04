@@ -250,10 +250,6 @@ M_SUB_RUNTIME_INFO = SVC_MAESTRO + "/SubscribeRuntimeInfo"
 M_WRITE_SETTING = SVC_MAESTRO + "/WriteSetting"
 M_READ_SETTING = SVC_MAESTRO + "/ReadSetting"
 M_SUB_SETTINGS = SVC_MAESTRO + "/SubscribeToSettingsChanges"
-M_SUB_OOBE = SVC_MAESTRO + "/SubscribeToOobeActions"
-
-# OobeAction values that report a bud going on / coming off the head.
-HEAD_ACTIONS = {10: ("left", True), 11: ("left", False), 12: ("right", True), 13: ("right", False)}
 
 # --------------------------------------------------------------------------
 # Protobuf wire codec (bounded)
@@ -584,11 +580,6 @@ def sv_eq(bands):
         if v != 0.0:
             body += f_float(i, v)
     return f_bytes(S_EQ, bytes(body))
-
-
-def decode_oobe_action(payload):
-    """OobeActionRsp -> the raw action number (0 when absent)."""
-    return get_uint(parse_fields(payload), 1, 0)
 
 
 def decode_setting_value(payload):

@@ -4,7 +4,7 @@ const path = require("path")
 const assert = require("assert")
 const src = fs.readFileSync(path.join(__dirname, "..", "..", "Model.js"), "utf8").replace(/^\.pragma library/m, "")
 const M = {}
-new Function("exports", src + "\nfor (const k of ['splitLines','parseEvent','sanitizeStatus','sanitizeControls','retryable','retryDelay','localPath','MAX_LINE','worn','headTransition']) exports[k] = eval(k)")(M)
+new Function("exports", src + "\nfor (const k of ['splitLines','parseEvent','sanitizeStatus','sanitizeControls','retryable','retryDelay','localPath','MAX_LINE']) exports[k] = eval(k)")(M)
 
 // bounded line splitting
 let r = M.splitLines("", '{"type":"a"}\n{"ty')
@@ -39,15 +39,4 @@ assert.strictEqual(M.sanitizeControls({ ctl_anc_gesture_loop: "active;rm" }).ctl
 assert.ok(M.retryable("link_lost") && M.retryable("crashed") && !M.retryable("absent") && !M.retryable("disconnected"))
 assert.deepStrictEqual([1, 2, 3, 9].map(M.retryDelay), [1000, 3000, 10000, 60000])
 assert.strictEqual(M.localPath("file:///a%20b/x.py"), "/a b/x.py")
-// ear detection
-const both = { left: true, right: true }
-assert.strictEqual(M.worn(null, {}), null)
-assert.strictEqual(M.worn({ left: true }, {}), null)
-assert.deepStrictEqual(M.worn(both, { left_in_case: 1 }), { left: false, right: true })   // docked = off-head
-assert.strictEqual(M.headTransition(null, both), "")                                   // first report: no action
-assert.strictEqual(M.headTransition(both, { left: false, right: true }), "off")
-assert.strictEqual(M.headTransition({ left: false, right: true }, { left: false, right: false }), "off")
-assert.strictEqual(M.headTransition({ left: false, right: true }, both), "on")
-assert.strictEqual(M.headTransition({ left: false, right: false }, { left: true, right: false }), "")
-assert.strictEqual(M.headTransition(both, both), "")
 console.log("model test passed")

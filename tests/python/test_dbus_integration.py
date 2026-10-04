@@ -206,35 +206,5 @@ class BridgeOverPrivateBus(unittest.TestCase):
         self.assertTrue(self.read_until(proc, "result")[-1]["ok"])  # real session unaffected
 
 
-    def test_stream_probe_is_passive(self):
-        probe = os.path.join(REPO, "tests", "stream-probe.py")
-        proc = subprocess.Popen(["/usr/bin/python3", "-I", "-B", probe, "--yes-real-hardware", "--seconds", "2.5"],
-                                env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        self.addCleanup(self._kill, proc)
-        time.sleep(1.2)
-        self.control("EmitMediaProps")
-        stdout, stderr = proc.communicate(timeout=20)
-        proc.stdout, proc.stderr = None, None
-        out = stdout.decode()
-        proc.stdout = None
-        self.assertEqual(proc.returncode, 0, out + stderr.decode())
-        self.assertIn("bluez /player0 org.freedesktop.DBus.Properties.PropertiesChanged ('org.bluez.MediaPlayer1', {'Status': 'paused'}, [])", out)
-        self.assertIn("gfps Device(0x03) ModelId(0x01) len=3 hex=123456", out)
-        self.assertIn("gfps Device(0x03) BatteryInfo(0x03) len=3 hex=5ad5ff batteries=[90%, 85% charging, unknown]", out)
-        self.assertIn("gsnd group=0x04 code=0x05 WearState len=2 hex=0806 wear=both worn", out)
-        self.assertIn("gsnd group=0x04 code=0x05 WearState len=2 hex=0804 wear=one worn", out)
-        self.assertIn("gsnd group=0x04 code=0x16 HeadGesturesActive len=2 hex=0801 head_gestures=active", out)
-        self.assertIn("time is up", out)
-        stats = self.control("Stats", "(a{si})")
-        self.assertEqual(stats["gfps_received"], 0)        # it sent nothing
-        self.assertEqual(stats["registered"], 0)
-
-    def test_stream_probe_requires_consent_flag(self):
-        probe = os.path.join(REPO, "tests", "stream-probe.py")
-        proc = subprocess.run(["/usr/bin/python3", "-I", "-B", probe], env=self.env, capture_output=True, timeout=20)
-        self.assertEqual(proc.returncode, 2)
-        self.assertEqual(self.control("Stats", "(a{si})")["connects"], 0)
-
-
 if __name__ == "__main__":
     unittest.main()

@@ -25,9 +25,3 @@ the Apache License, Version 2.0.
 The connection approach (a client-role BlueZ Profile1 for the Maestro UUID,
 then Device1.ConnectProfile) and the Pixel Buds Pro 2 device class constant
 follow pbpctrl's cli/src/bt.rs.
-
-Protocol facts (no code) about the buds' "GSND CONTROL" RFCOMM channel used
-by tests/stream-probe.py were taken from the documentation and captures of
-opencontrolpixelbudspro2 (https://github.com/tedsluis/opencontrolpixelbudspro2).
-The Fast Pair message framing in that probe follows pbpctrl's libgfps
-(Apache-2.0).

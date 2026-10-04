@@ -129,8 +129,6 @@ class ParseCommand(unittest.TestCase):
                          "assistant")
         self.assertEqual(self.ok(id=8, cmd="set", key="anc-gesture-loop", modes=["off", "aware"])["modes"],
                          ["off", "aware"])
-        self.assertEqual(self.ok(id=9, cmd="head_watch", on=False)["on"], False)
-        self.assertEqual(self.ok(id=10, cmd="set_pref", key="auto_pause", value=False)["value"], False)
 
     def test_invalid(self):
         for raw in (b"not json", b"[1]", "é".encode(), {"cmd": "refresh"}, {"id": -1, "cmd": "refresh"},
@@ -148,13 +146,7 @@ class ParseCommand(unittest.TestCase):
                     {"id": 1, "cmd": "set", "key": "gesture-control", "left": "play", "right": "anc"},
                     {"id": 1, "cmd": "set", "key": "anc-gesture-loop", "modes": ["off"]},
                     {"id": 1, "cmd": "set", "key": "anc-gesture-loop", "modes": ["off", "off"]},
-                    {"id": 1, "cmd": "set", "key": "auto-ota", "value": True},
-                    {"id": 1, "cmd": "head"},
-                    {"id": 1, "cmd": "head_watch"},
-                    {"id": 1, "cmd": "head_watch", "on": 1},
-                    {"id": 1, "cmd": "head_watch", "on": True, "rate": 10},
-                    {"id": 1, "cmd": "set_pref", "key": "theme", "value": True},
-                    {"id": 1, "cmd": "set_pref", "key": "auto_pause", "value": "no"}):
+                    {"id": 1, "cmd": "set", "key": "auto-ota", "value": True}):
             self.bad(raw)
         self.bad(b'{"id":1,"cmd":"set","key":"eq","bands":[NaN,0,0,0,0]}')
 
@@ -379,116 +371,6 @@ class SessionTests(EnvCase):
             line.encode("ascii")
 
 
-class HeadWatch(EnvCase):
-    def setUp(self):
-        super().setUp()
-        self.rig = Rig()
-        self.addCleanup(self.rig.close)
-        self.rig.session.start()
-
-    def run_for(self, seconds):
-        later(seconds, self.rig.close_stdin)
-        with _StopCatcher() as stop:
-            self.rig.session.run()
-        return stop
-
-    def test_off_by_default(self):
-        self.run_for(1.5)
-        self.assertEqual(self.rig.buds.count(m.M_SUB_OOBE), 0)
-        self.assertEqual(self.rig.out.of("head"), [])
-
-    def test_snapshot_polling_reports_changes_once(self):
-        r = self.rig
-        r.send(id=1, cmd="head_watch", on=True)
-        later(1.2, lambda: r.buds.head.update(left=False))      # never pushed live
-        later(2.6, lambda: r.buds.head.update(left=True))
-        self.run_for(4.2)
-        heads = [(e["left"], e["right"]) for e in r.out.of("head")]
-        self.assertEqual(heads, [(True, True), (False, True), (True, True)])
-        asks = r.buds.count(m.M_SUB_OOBE)
-        self.assertTrue(3 <= asks <= 6, asks)                     # about once a second, bounded
-
-    def test_disable_stops_polling(self):
-        r = self.rig
-        r.send(id=1, cmd="head_watch", on=True)
-        later(1.3, lambda: r.send(id=2, cmd="head_watch", on=False))
-        counts = []
-        later(1.8, lambda: counts.append(r.buds.count(m.M_SUB_OOBE)))
-        self.run_for(3.5)
-        self.assertEqual(r.buds.count(m.M_SUB_OOBE), counts[0])
-        self.assertIn(m.M_SUB_OOBE, r.buds.cancels)
-        self.assertTrue(r.results()[2]["ok"])
-
-    def test_commands_not_starved(self):
-        r = self.rig
-        r.send(id=1, cmd="head_watch", on=True)
-        times = {}
-        def go():
-            times["sent"] = time.monotonic()
-            r.send(id=2, cmd="refresh")
-        later(1.1, go)
-        self.run_for(2.5)
-        res = [e for e in r.out.of("result") if e["id"] == 2]
-        self.assertTrue(res and res[0]["ok"])
-
-    def test_link_drop_then_reconnect_snapshot(self):
-        r = self.rig
-        r.send(id=1, cmd="head_watch", on=True)
-        later(0.6, lambda: r.buds.sock.shutdown(socket.SHUT_RDWR))  # buds drop the link
-        stop = self.run_for(5.0)
-        self.assertEqual(stop.reason, "link_lost")
-        self.assertEqual(r.out.of("head")[-1], {"type": "head", "left": True, "right": True})
-        # The new session's first snapshot is authoritative: left came out meanwhile.
-        rig2 = Rig()
-        self.addCleanup(rig2.close)
-        rig2.buds.head["left"] = False
-        rig2.session.start()
-        rig2.send(id=1, cmd="head_watch", on=True)
-        later(0.8, rig2.close_stdin)
-        with _StopCatcher():
-            rig2.session.run()
-        self.assertEqual(rig2.out.of("head"), [{"type": "head", "left": False, "right": True}])
-
-    def test_ohd_read_at_start(self):
-        self.assertEqual(self.rig.out.of("controls")[-1]["controls"]["ctl_ohd"], "true")
-
-
-class PrefsTests(EnvCase):
-    def test_default_set_and_hostile(self):
-        prefs = bridge.Prefs()
-        self.assertTrue(prefs.get_auto_pause())
-        self.assertTrue(prefs.put_auto_pause(False))
-        leaf = os.path.join(self.state, "omarchy-pixelbuds", "prefs")
-        with open(leaf) as f:
-            self.assertEqual(f.read(), "auto_pause=0\n")
-        self.assertEqual(stat.S_IMODE(os.lstat(leaf).st_mode), 0o600)
-        self.assertFalse(prefs.get_auto_pause())
-        with open(leaf, "w") as f:
-            f.write("garbage")
-        self.assertTrue(prefs.get_auto_pause())               # invalid = default on
-        os.unlink(leaf)
-        target = os.path.join(self.tmp.name, "target")
-        with open(target, "w") as f:
-            f.write("auto_pause=0\n")
-        os.symlink(target, leaf)
-        self.assertTrue(prefs.get_auto_pause())               # symlink not followed
-        self.assertTrue(prefs.put_auto_pause(True))
-        self.assertFalse(os.path.islink(leaf))
-        with open(target) as f:
-            self.assertEqual(f.read(), "auto_pause=0\n")       # target untouched
-
-    def test_set_pref_command(self):
-        rig = Rig()
-        self.addCleanup(rig.close)
-        rig.session.start()
-        rig.send(id=1, cmd="set_pref", key="auto_pause", value=False)
-        later(0.3, rig.close_stdin)
-        with _StopCatcher():
-            rig.session.run()
-        self.assertTrue(rig.results()[1]["ok"])
-        self.assertFalse(bridge.Prefs().get_auto_pause())
-
-
 class MainLifecycle(EnvCase):
     def run_main(self, fake, script=(), close_after=None):
         r, w = os.pipe()
@@ -508,8 +390,7 @@ class MainLifecycle(EnvCase):
         fake.device = None
         code, out = self.run_main(fake)
         self.assertEqual(code, 0)
-        self.assertEqual([e["type"] for e in out.events()], ["hello", "prefs", "bye"])
-        self.assertEqual(out.of("prefs")[0]["auto_pause"], True)
+        self.assertEqual([e["type"] for e in out.events()], ["hello", "bye"])
         self.assertEqual(out.events()[-1]["reason"], "absent")
 
     def test_not_resolved_is_never_connected(self):

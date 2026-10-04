@@ -545,31 +545,6 @@ Panel {
               }
             }
           }
-
-          // Ear detection: pause media when a bud comes out, resume when both
-          // are back (Service.qml). Needs the buds' own on-head detection.
-          Toggle {
-            width: parent.width
-            label: "Pause when a bud is removed"
-            checked: root.svc ? root.svc.autoPause : true
-            enabled: !!root.svc && !root.svc.ohdOff && root.svc.ready
-            opacity: enabled ? 1.0 : 0.5
-            foreground: root.fg
-            fontFamily: root.fontFamily
-            titleSize: Style.font.bodySmall
-            onClicked: if (root.svc) root.svc.setAutoPause(!root.svc.autoPause)
-          }
-
-          Text {
-            textFormat: Text.PlainText
-            visible: !!root.svc && root.svc.ohdOff
-            width: parent.width
-            wrapMode: Text.WordWrap
-            text: "On-head detection is off in Advanced."
-            color: Qt.darker(root.fg, 1.4)
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-          }
         }
 
         // ---------- EQ (collapsed): sound tuning ----------
@@ -597,7 +572,7 @@ Panel {
             cursorShape: Qt.PointingHandCursor
             onClicked: {
               root.eqOpen = !root.eqOpen
-              if (root.eqOpen && !(root.svc && root.svc.controlsRead)) root.refreshControls()
+              if (root.eqOpen && Object.keys(root.controls).length === 0) root.refreshControls()
             }
           }
         }
@@ -671,7 +646,7 @@ Panel {
             cursorShape: Qt.PointingHandCursor
             onClicked: {
               root.advancedOpen = !root.advancedOpen
-              if (root.advancedOpen && !(root.svc && root.svc.controlsRead)) root.refreshControls()
+              if (root.advancedOpen && Object.keys(root.controls).length === 0) root.refreshControls()
             }
           }
         }
@@ -684,10 +659,9 @@ Panel {
           Text {
 
             textFormat: Text.PlainText
-            visible: !(root.svc && root.svc.controlsRead) || Object.keys(root.controls).length === 0
+            visible: Object.keys(root.controls).length === 0
             width: parent.width
-            text: root.svc && root.svc.readingControls ? "Reading device settings…"
-                : root.svc && root.svc.controlsRead ? "The buds reported no adjustable settings." : ""
+            text: root.svc && root.svc.readingControls ? "Reading device settings…" : "The buds reported no adjustable settings."
             color: Qt.darker(root.fg, 1.4)
             font.family: root.fontFamily
             font.pixelSize: Style.font.bodySmall

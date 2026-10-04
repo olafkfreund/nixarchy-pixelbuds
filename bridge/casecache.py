@@ -1,11 +1,8 @@
 #!/usr/bin/python3 -I
-"""Race-free small-state files for the Pixel Buds widget.
+"""Race-free case-battery cache for the Pixel Buds widget.
 
-    casecache.py put <pct>   store a 0-100 case reading with the current time
+    casecache.py put <pct>   store a 0-100 reading with the current time
     casecache.py get         print "<pct> <ts>" if a sane reading is stored
-
-Also holds the user's one preference (get_pref / put_pref): whether to pause
-media when a bud is removed. An absent or invalid file means "on".
 
 Every access goes through a held directory descriptor with O_NOFOLLOW (and
 O_NONBLOCK on reads, so a planted FIFO cannot stall the shell) and
@@ -86,42 +83,18 @@ def open_dir():
     return fd
 
 
-def _read_small(dfd, name):
-    """Bounded read of a regular, owned leaf; None for anything else."""
+def get(dfd):
     try:
-        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=dfd)
+        fd = os.open(NAME, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=dfd)
     except OSError:
         return None
     try:
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_size > MAX_BYTES:
             return None
-        return os.read(fd, MAX_BYTES)
+        data = os.read(fd, MAX_BYTES)
     finally:
         os.close(fd)
-
-
-def _write_atomic(dfd, name, data):
-    tmp = ".%s.%d.%d" % (name, os.getpid(), int.from_bytes(os.urandom(4), "big"))
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
-                 0o600, dir_fd=dfd)
-    try:
-        os.write(fd, data)
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-    try:
-        # rename replaces the leaf atomically and never follows a symlink there.
-        os.rename(tmp, name, src_dir_fd=dfd, dst_dir_fd=dfd)
-    except OSError:
-        os.unlink(tmp, dir_fd=dfd)
-        raise
-
-
-def get(dfd):
-    data = _read_small(dfd, NAME)
-    if data is None:
-        return None
     parts = data.decode("ascii", "replace").split()
     if len(parts) != 2 or not all(p.isdigit() for p in parts):
         return None
@@ -134,20 +107,20 @@ def get(dfd):
 def put(dfd, pct):
     if not 0 <= pct <= 100:
         return
-    _write_atomic(dfd, NAME, ("%d %d\n" % (pct, int(time.time()))).encode("ascii"))
-
-
-PREFS = "prefs"
-
-
-def get_pref(dfd):
-    """True unless the user turned auto-pause off ("auto_pause=0")."""
-    data = _read_small(dfd, PREFS)
-    return data != b"auto_pause=0\n"
-
-
-def put_pref(dfd, auto_pause):
-    _write_atomic(dfd, PREFS, b"auto_pause=1\n" if auto_pause else b"auto_pause=0\n")
+    tmp = ".case.%d.%d" % (os.getpid(), int.from_bytes(os.urandom(4), "big"))
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                 0o600, dir_fd=dfd)
+    try:
+        os.write(fd, ("%d %d\n" % (pct, int(time.time()))).encode("ascii"))
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    try:
+        # rename replaces the leaf atomically and never follows a symlink there.
+        os.rename(tmp, NAME, src_dir_fd=dfd, dst_dir_fd=dfd)
+    except OSError:
+        os.unlink(tmp, dir_fd=dfd)
+        raise
 
 
 def main(argv):
