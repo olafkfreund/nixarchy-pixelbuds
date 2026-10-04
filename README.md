@@ -17,11 +17,14 @@ Pixel Buds battery and listening-mode control, right in the Omarchy bar.
   buds themselves.
 - **Shared volume and swipe OSD**: shows the buds' native Bluetooth absolute
   volume and summons Omarchy's volume OSD when either bud changes it.
-- **Device toggles**: multipoint audio, speech detection (auto-transparency
-  while you talk), on-head detection, and volume level alerts. Rows are
-  capability-gated — a control only appears if your buds answer for it.
-- **Touch controls**: enable/disable gestures, choose ANC or Assistant for
-  each bud's hold action, and select the listening modes that hold cycles.
+- **Device toggles**: multipoint audio and speech detection (auto-transparency
+  while you talk). Rows are capability-gated — a control only appears if your
+  buds answer for it. Phone-only features (on-head detection, volume level
+  alerts, the Assistant hold) are left to the Pixel Buds app: on a computer
+  they have no effect.
+- **Touch controls**: enable/disable gestures, set each bud's hold to ANC
+  (a hold set to Assistant from a phone can be moved back), and select the
+  listening modes that hold cycles.
 - **EQ**, a collapsed section of its own: the 5-band EQ, balance,
   volume-dependent EQ and mono audio. Device toggles and touch controls live
   in the collapsed **Advanced** section below it.

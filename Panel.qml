@@ -669,8 +669,6 @@ Panel {
 
           ToggleRow { label: "Multipoint audio"; ctlKey: "multipoint"; statusKey: "ctl_multipoint" }
           ToggleRow { label: "Speech detection"; ctlKey: "speech-detection"; statusKey: "ctl_speech_detection" }
-          ToggleRow { label: "On-head detection"; ctlKey: "ohd"; statusKey: "ctl_ohd" }
-          ToggleRow { label: "Volume level alerts"; ctlKey: "volume-exposure-notifications"; statusKey: "ctl_volume_exposure_notifications" }
 
           PanelSectionHeader {
             visible: root.controls.ctl_gestures !== undefined
@@ -878,10 +876,13 @@ Panel {
       spacing: Style.space(4)
 
       Repeater {
-        model: ["anc", "assistant"]
+        // Assistant is served only to Google's app on a phone; on this
+        // machine a hold set to it just plays the "no assistant" tone, so
+        // the panel offers ANC only (and can move a hold back to it).
+        model: ["anc"]
         Button {
           required property var modelData
-          text: String(modelData) === "anc" ? "ANC" : "Assistant"
+          text: "ANC"
           fontSize: Style.font.bodySmall
           foreground: root.fg
           fontFamily: root.fontFamily
