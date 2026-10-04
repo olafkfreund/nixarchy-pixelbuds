@@ -610,8 +610,10 @@ class BluezGio:
 # --------------------------------------------------------------------------
 
 class Session:
-    def __init__(self, emitter, hub, device, cache=None, clock=time.monotonic, wall=time.time):
+    def __init__(self, emitter, hub, device, cache=None, clock=time.monotonic, wall=time.time,
+                 prefs=None):
         self.emitter = emitter
+        self.prefs = prefs if prefs is not None else Prefs()
         self.hub = hub
         self.device = device
         self.cache = cache if cache is not None else CaseCache()
@@ -626,6 +628,15 @@ class Session:
         self.error = ""
         self.last_state = None
         self.queue = collections.deque()
+        # Ear detection. The buds report on/off-head only as a snapshot when
+        # the OOBE action stream is (re)subscribed, so while the watch is on
+        # the idle loop re-asks about once a second.
+        self.head_watch = False
+        self.head = {"left": None, "right": None}
+        self.head_emitted = None
+        self.head_next = 0.0
+        self.head_seen = None          # sides reported during the current ask
+        self.head_asks = 0
 
     # ---- state ----
     @property
@@ -700,12 +711,15 @@ class Session:
                 self.runtime_at = self.clock()
                 self.emit_state()
             elif method == maestro.M_SUB_OOBE:
-                action = maestro.decode_oobe_action(payload)
-                head = maestro.HEAD_ACTIONS.get(action)
-                ev = {"type": "oobe", "action": action if 0 <= action < 1 << 16 else -1}
-                if head:
-                    ev["side"], ev["on_head"] = head
-                self.emitter.emit(ev)
+                head = maestro.HEAD_ACTIONS.get(maestro.decode_oobe_action(payload))
+                if head is None or not self.head_watch:
+                    return
+                side, on = head
+                self.head[side] = on
+                if self.head_seen is not None:
+                    self.head_seen.add(side)     # ask in progress: emit at its end
+                else:
+                    self.emit_head()
             elif method == maestro.M_SUB_SETTINGS:
                 decoded = maestro.decode_setting_value(payload)
                 if decoded is None:
@@ -751,8 +765,10 @@ class Session:
         self.client.subscribe(maestro.M_SUB_RUNTIME_INFO)
         self.wait_runtime(3.0)
         self.client.subscribe(maestro.M_SUB_SETTINGS)
-        self.client.subscribe(maestro.M_SUB_OOBE)
+        # On-head detection gates the widget's ear-detection option.
+        self.try_read(maestro.S_OHD)
         self.emit_state(force=True)
+        self.emit_controls()
         self.emitter.emit({"type": "ready"})
 
     # ---- commands ----
@@ -768,7 +784,7 @@ class Session:
         kind = command_kind(cmd)
         for i, queued in enumerate(self.queue):
             if command_kind(queued) == kind:
-                if cmd["cmd"] in ("refresh", "controls", "head"):
+                if cmd["cmd"] in ("refresh", "controls"):
                     self.result(cmd, True)       # identical poll already queued
                     return
                 self.result(queued, False, "superseded")
@@ -802,7 +818,57 @@ class Session:
                 except ValueError as error:
                     self.result(cmd, False, str(error))
                 continue
-            self.client.poll(self.clock() + 60.0)
+            now = self.clock()
+            if self.head_watch and now >= self.head_next:
+                self.ask_head()
+                continue
+            deadline = now + 60.0
+            if self.head_watch:
+                deadline = min(deadline, self.head_next)
+            self.client.poll(deadline)
+
+    # ---- ear detection ----
+    HEAD_INTERVAL = 1.0      # seconds between snapshot requests
+    HEAD_WINDOW = 0.4        # how long one snapshot may take to arrive
+
+    def emit_head(self):
+        if self.head["left"] is None or self.head["right"] is None:
+            return           # never report a side we have not heard about
+        now = (self.head["left"], self.head["right"])
+        if now != self.head_emitted:
+            self.head_emitted = now
+            self.emitter.emit({"type": "head", "left": now[0], "right": now[1]})
+
+    def ask_head(self):
+        """Re-subscribe to the OOBE stream and collect its snapshot. Bounded
+        to HEAD_WINDOW; stdin commands are picked up right after."""
+        self.head_asks += 1
+        self.head_seen = set()
+        try:
+            self.client.subscribe(maestro.M_SUB_OOBE)
+            deadline = self.clock() + self.HEAD_WINDOW
+            while len(self.head_seen) < 2 and self.clock() < deadline and not self.hub.reader.lines:
+                self.client.poll(deadline)
+        except maestro.RpcError:
+            pass
+        finally:
+            self.head_seen = None
+            self.head_next = self.clock() + self.HEAD_INTERVAL
+        self.emit_head()
+
+    def set_head_watch(self, on):
+        if on == self.head_watch:
+            return
+        self.head_watch = on
+        if on:
+            self.head_next = 0.0
+            self.head_emitted = None     # report once when (re)enabled
+        else:
+            for uid, method in list(self.client.streams.items()):
+                if method == maestro.M_SUB_OOBE:
+                    self.client.cancel(uid)
+            self.head = {"left": None, "right": None}
+            self.head_emitted = None
 
     def execute(self, cmd):
         name = cmd["cmd"]
@@ -813,11 +879,11 @@ class Session:
                 self.client.subscribe(maestro.M_SUB_RUNTIME_INFO)
                 self.wait_runtime(3.0)
             self.emit_state()
-        elif name == "head":
-            # On/off-head state is only reported as a snapshot when the
-            # OOBE action stream is (re)subscribed.
-            self.client.subscribe(maestro.M_SUB_OOBE)
-            self.client.poll(self.clock() + 0.4)
+        elif name == "head_watch":
+            self.set_head_watch(cmd["on"])
+        elif name == "set_pref":
+            if not self.prefs.put_auto_pause(cmd["value"]):
+                raise ValueError("could not save the preference")
         elif name == "controls":
             for sid in (maestro.S_MULTIPOINT, maestro.S_OHD, maestro.S_SPEECH_DETECTION,
                         maestro.S_VOLUME_EXPOSURE, maestro.S_VOLUME_EQ, maestro.S_MONO,
@@ -913,8 +979,17 @@ def parse_command(raw):
     name = obj.get("cmd")
     allowed = {"id", "cmd"}
     out = {"id": cid, "cmd": name}
-    if name in ("refresh", "controls", "head"):
+    if name in ("refresh", "controls"):
         pass
+    elif name == "head_watch":
+        allowed.add("on")
+        out["on"] = _bool(obj, "on")
+    elif name == "set_pref":
+        allowed.update(("key", "value"))
+        if obj.get("key") != "auto_pause":
+            raise ValueError("unknown preference")
+        out["key"] = "auto_pause"
+        out["value"] = _bool(obj, "value")
     elif name == "set_anc":
         allowed.add("mode")
         if obj.get("mode") not in ANC_MODES:
@@ -1002,6 +1077,36 @@ class CaseCache:
         return out
 
 
+class Prefs:
+    """The user's auto-pause choice, in the same private state directory and
+    through the same descriptor-safe helper as the case cache."""
+
+    def get_auto_pause(self):
+        try:
+            dfd = casecache.open_dir()
+        except OSError:
+            return True
+        try:
+            return casecache.get_pref(dfd)
+        except OSError:
+            return True
+        finally:
+            os.close(dfd)
+
+    def put_auto_pause(self, value):
+        try:
+            dfd = casecache.open_dir()
+        except OSError:
+            return False
+        try:
+            casecache.put_pref(dfd, bool(value))
+            return True
+        except OSError:
+            return False
+        finally:
+            os.close(dfd)
+
+
 # --------------------------------------------------------------------------
 # Main
 # --------------------------------------------------------------------------
@@ -1066,6 +1171,7 @@ def main(argv=None, make_bluez=BluezGio, stdin_fd=0, stdout=None):
     sock = None
     reason, detail = "error", ""
     emitter.emit({"type": "hello", "v": PROTOCOL_VERSION})
+    emitter.emit({"type": "prefs", "auto_pause": Prefs().get_auto_pause()})
     try:
         try:
             bluez = make_bluez()

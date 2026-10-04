@@ -77,11 +77,14 @@ class FakeBuds(threading.Thread):
         self.writes = []                 # SettingValue bytes written
         self.cancels = []
         self.subs = {}                   # method path -> uid
+        # On/off-head, reported ONLY as a snapshot when the OOBE stream is
+        # (re)subscribed, like the real Pixel Buds Pro 2.
+        self.head = {"left": True, "right": True}
         self.lock = threading.Lock()
         self.stopped = threading.Event()
         self.names = {m.path_ids(p): p for p in (
             m.M_GET_SOFTWARE_INFO, m.M_SUB_RUNTIME_INFO, m.M_WRITE_SETTING,
-            m.M_READ_SETTING, m.M_SUB_SETTINGS)}
+            m.M_READ_SETTING, m.M_SUB_SETTINGS, m.M_SUB_OOBE)}
 
     def send_packet(self, packet, channel=None):
         ch = self.channel if channel is None else channel
@@ -162,6 +165,15 @@ class FakeBuds(threading.Thread):
             self.push_runtime(self.runtime)
         elif path == m.M_SUB_SETTINGS:
             self.subs[path] = pkt.uid()
+        elif path == m.M_SUB_OOBE:
+            self.subs[path] = pkt.uid()
+            for side, on, off in (("left", 10, 11), ("right", 12, 13)):
+                action = on if self.head[side] else off
+                self.send_packet(m.RpcPacket(m.PT_SERVER_STREAM, pkt.channel_id, pkt.service_id,
+                                             pkt.method_id, m.f_varint(1, action), 0, pkt.call_id))
+
+    def count(self, path):
+        return sum(1 for p, _ in list(self.requests) if p == path)
 
 
 class Collector:
