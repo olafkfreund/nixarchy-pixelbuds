@@ -593,11 +593,12 @@ Panel {
             font.pixelSize: Style.font.bodySmall
           }
 
-          ToggleRow { label: "Volume EQ"; ctlKey: "volume-eq"; statusKey: "ctl_volume_eq" }
-          ToggleRow { label: "Mono audio"; ctlKey: "mono"; statusKey: "ctl_mono" }
+          ToggleRow { label: "Volume EQ"; ctlKey: "volume-eq"; statusKey: "ctl_volume_eq"; hint: "Boosts bass and treble at low volume so quiet listening sounds fuller" }
+          ToggleRow { label: "Mono audio"; ctlKey: "mono"; statusKey: "ctl_mono"; hint: "Plays the same mixed sound in both buds, handy with one bud in" }
 
           SliderRow {
             label: "Balance"
+            hint: "Shift volume toward the left or right bud"
             visible: root.controls.ctl_balance !== undefined
             from: -100; to: 100; step: 5
             value: Math.max(-100, Math.min(100, parseInt(root.controls.ctl_balance) || 0))
@@ -611,6 +612,11 @@ Panel {
               required property var modelData
               required property int index
               label: modelData
+              hint: ["Boost or cut the deepest bass: rumble and kick drums",
+                     "Boost or cut bass: body and punch",
+                     "Boost or cut the midrange: voices and guitars",
+                     "Boost or cut treble: clarity and detail",
+                     "Boost or cut the highest treble: air and sparkle"][index]
               visible: root.eqBands.length === 5
               from: -6; to: 6; step: 0.5
               value: root.eqBands.length === 5 ? root.eqBands[index] : 0
@@ -667,8 +673,8 @@ Panel {
             font.pixelSize: Style.font.bodySmall
           }
 
-          ToggleRow { label: "Multipoint audio"; ctlKey: "multipoint"; statusKey: "ctl_multipoint" }
-          ToggleRow { label: "Speech detection"; ctlKey: "speech-detection"; statusKey: "ctl_speech_detection" }
+          ToggleRow { label: "Multipoint audio"; ctlKey: "multipoint"; statusKey: "ctl_multipoint"; hint: "Stay connected to two devices at once, like your phone and this computer" }
+          ToggleRow { label: "Speech detection"; ctlKey: "speech-detection"; statusKey: "ctl_speech_detection"; hint: "When you start talking, the buds lower your audio and switch to transparency" }
 
           PanelSectionHeader {
             visible: root.controls.ctl_gestures !== undefined
@@ -679,14 +685,20 @@ Panel {
             fontFamily: root.fontFamily
           }
 
-          ToggleRow { label: "Touch controls"; ctlKey: "gestures"; statusKey: "ctl_gestures" }
-          HoldActionRow { label: "Left hold"; side: "left"; statusKey: "ctl_gesture_left" }
-          HoldActionRow { label: "Right hold"; side: "right"; statusKey: "ctl_gesture_right" }
+          ToggleRow { label: "Touch controls"; ctlKey: "gestures"; statusKey: "ctl_gestures"; hint: "Turn the buds' tap, swipe and hold gestures on or off" }
+          HoldActionRow { label: "Left hold"; side: "left"; statusKey: "ctl_gesture_left"; hint: "Press and hold the left bud to cycle listening modes" }
+          HoldActionRow { label: "Right hold"; side: "right"; statusKey: "ctl_gesture_right"; hint: "Press and hold the right bud to cycle listening modes" }
 
           Column {
             visible: root.controls.ctl_anc_gesture_loop !== undefined
             width: parent.width
             spacing: Style.space(6)
+
+            HoverHandler { id: cyclesHover }
+            PanelToolTip {
+              visible: cyclesHover.hovered
+              text: "Listening modes a press and hold cycles through (pick at least two)"
+            }
 
             Text {
               textFormat: Text.PlainText
@@ -809,6 +821,11 @@ Panel {
   // for it — an unanswered control renders nothing at all.
   component ToggleRow: Item {
     id: trow
+    // Mouse-over explanation; HoverHandler is passive, so clicks and drags
+    // still reach the controls.
+    property string hint: ""
+    HoverHandler { id: trowHover }
+    PanelToolTip { visible: trow.hint !== "" && trowHover.hovered; text: trow.hint }
     property string label: ""
     property string ctlKey: ""
     property string statusKey: ""
@@ -849,6 +866,11 @@ Panel {
 
   component HoldActionRow: Item {
     id: hrow
+    // Mouse-over explanation; HoverHandler is passive, so clicks and drags
+    // still reach the controls.
+    property string hint: ""
+    HoverHandler { id: hrowHover }
+    PanelToolTip { visible: hrow.hint !== "" && hrowHover.hovered; text: hrow.hint }
     property string label: ""
     property string side: ""
     property string statusKey: ""
@@ -900,6 +922,11 @@ Panel {
   // then re-read, so the row always ends up showing the device's truth.
   component SliderRow: Item {
     id: srow
+    // Mouse-over explanation; HoverHandler is passive, so clicks and drags
+    // still reach the controls.
+    property string hint: ""
+    HoverHandler { id: srowHover }
+    PanelToolTip { visible: srow.hint !== "" && srowHover.hovered; text: srow.hint }
     property string label: ""
     property real from: 0
     property real to: 100
