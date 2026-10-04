@@ -699,6 +699,13 @@ class Session:
                 self.runtime = maestro.decode_runtime_info(payload)
                 self.runtime_at = self.clock()
                 self.emit_state()
+            elif method == maestro.M_SUB_OOBE:
+                action = maestro.decode_oobe_action(payload)
+                head = maestro.HEAD_ACTIONS.get(action)
+                ev = {"type": "oobe", "action": action if 0 <= action < 1 << 16 else -1}
+                if head:
+                    ev["side"], ev["on_head"] = head
+                self.emitter.emit(ev)
             elif method == maestro.M_SUB_SETTINGS:
                 decoded = maestro.decode_setting_value(payload)
                 if decoded is None:
@@ -744,6 +751,7 @@ class Session:
         self.client.subscribe(maestro.M_SUB_RUNTIME_INFO)
         self.wait_runtime(3.0)
         self.client.subscribe(maestro.M_SUB_SETTINGS)
+        self.client.subscribe(maestro.M_SUB_OOBE)
         self.emit_state(force=True)
         self.emitter.emit({"type": "ready"})
 
@@ -760,7 +768,7 @@ class Session:
         kind = command_kind(cmd)
         for i, queued in enumerate(self.queue):
             if command_kind(queued) == kind:
-                if cmd["cmd"] in ("refresh", "controls"):
+                if cmd["cmd"] in ("refresh", "controls", "head"):
                     self.result(cmd, True)       # identical poll already queued
                     return
                 self.result(queued, False, "superseded")
@@ -805,6 +813,11 @@ class Session:
                 self.client.subscribe(maestro.M_SUB_RUNTIME_INFO)
                 self.wait_runtime(3.0)
             self.emit_state()
+        elif name == "head":
+            # On/off-head state is only reported as a snapshot when the
+            # OOBE action stream is (re)subscribed.
+            self.client.subscribe(maestro.M_SUB_OOBE)
+            self.client.poll(self.clock() + 0.4)
         elif name == "controls":
             for sid in (maestro.S_MULTIPOINT, maestro.S_OHD, maestro.S_SPEECH_DETECTION,
                         maestro.S_VOLUME_EXPOSURE, maestro.S_VOLUME_EQ, maestro.S_MONO,
@@ -900,7 +913,7 @@ def parse_command(raw):
     name = obj.get("cmd")
     allowed = {"id", "cmd"}
     out = {"id": cid, "cmd": name}
-    if name in ("refresh", "controls"):
+    if name in ("refresh", "controls", "head"):
         pass
     elif name == "set_anc":
         allowed.add("mode")
