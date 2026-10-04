@@ -126,6 +126,7 @@ class FakeBuds(threading.Thread):
                 pkt = m.decode_rpc_frame(frame)
                 if pkt is not None:
                     self.handle(pkt)
+        self.sock.close()
         self.stopped.set()
 
     def handle(self, pkt):
