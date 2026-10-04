@@ -6,9 +6,9 @@ import qs.Commons
 import qs.Ui
 import "Model.js" as Model
 
-// Pixel Buds Pro in the bar. Data comes from status.sh -> pbpctrl (RFCOMM to
-// the buds); the only direct Bluetooth contact here is a read-only signal
-// subscription on org.bluez that makes connect/disconnect show up instantly.
+// Pixel Buds Pro in the bar. Device data and control live in Service.qml
+// (one per shell), which runs the bundled Python Maestro bridge; every bar
+// widget instance, one per monitor, reads and drives that single service.
 // Hidden entirely while no Pixel Buds are connected.
 Panel {
   id: root
@@ -16,27 +16,31 @@ Panel {
   ipcTarget: "io.github.rdoupe.pixelbuds"
   manageIpc: false
 
-  property var status: ({})
-  property var controls: ({})
   property bool advancedOpen: false
-  property bool everLoaded: false
   property int ancIndex: 1
   property bool cursorActive: false
-  property string pendingAnc: ""
 
-  readonly property string scriptPath: String(Qt.resolvedUrl("status.sh")).replace(/^file:\/\//, "")
-  readonly property string pbpctrlPath: String(Qt.resolvedUrl("pbpctrl-locked.sh")).replace(/^file:\/\//, "")
-  // Distro identities. Never ambient PATH: a shadowed sh/timeout/gdbus/python3
-  // would run before status.sh could enforce its own allowlist.
-  readonly property string shBin: "/usr/bin/sh"
-  readonly property string timeoutBin: "/usr/bin/timeout"
-  readonly property string gdbusBin: "/usr/bin/gdbus"
-  readonly property string python3Bin: "/usr/bin/python3"
-  readonly property string wlCopyBin: "/usr/bin/wl-copy"
+  // The service registers asynchronously; re-ask for it for a short while.
+  property int serviceTick: 0
+  readonly property var svc: {
+    var tick = serviceTick
+    var host = root.bar ? root.bar.shell : null
+    return host && typeof host.serviceFor === "function" ? host.serviceFor(root.moduleName) : null
+  }
+  Timer {
+    interval: 1000
+    repeat: true
+    running: root.svc === null && root.serviceTick < 60
+    onTriggered: root.serviceTick++
+  }
+
+  readonly property var status: svc ? svc.status : ({})
+  readonly property var controls: svc ? svc.controls : ({})
+  readonly property string pendingAnc: svc ? svc.pendingAnc : ""
+
+  // Distro identity for the OSD helper. Never ambient PATH.
   readonly property string omarchyShellBin: "/usr/bin/omarchy-shell"
   readonly property string trustedPath: "/usr/bin:/bin"
-  readonly property int statusStdoutCeiling: 16384
-  readonly property int controlsStdoutCeiling: 8192
   readonly property int pollInterval: Math.max(5, parseInt(setting("pollIntervalSec", 30)) || 30) * 1000
   readonly property bool hideWhenDisconnected: String(setting("hideWhenDisconnected", true)) === "true"
   readonly property color urgentColor: bar ? bar.urgent : Color.urgent
@@ -48,7 +52,6 @@ Panel {
   }
 
   readonly property bool connected: String(status.connected || "0") === "1"
-  readonly property bool missingPbpctrl: String(status.missing_pbpctrl || "0") === "1"
   readonly property bool adaptiveSupported: String(status.adaptive_supported || "0") === "1"
   readonly property var ancModes: adaptiveSupported ? Model.ANC_MODES : Model.LEGACY_ANC_MODES
   readonly property string budsName: String(status.name || "Pixel Buds")
@@ -84,18 +87,8 @@ Panel {
   readonly property color fg: bar ? bar.foreground : Color.foreground
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
-  // All pbpctrl access is serialized through this op queue — concurrent
-  // RFCOMM sessions corrupt each other's reads. The gate is our own flag,
-  // never Process.running, which only turns true asynchronously after the
-  // spawn. Ops: "status", "controls", ["set", key, args], ["anc", mode].
-  // Duplicate polls collapse; a queued write is replaced by a newer one to
-  // the same target (last write wins).
-  property var opQueue: []
-  property bool opRunning: false
-
-  // Allowlist only. clearEnvironment drops PYTHON*, LD_*, and ambient PATH
-  // before /usr/bin/sh or /usr/bin/python3 starts. PATH is fixed for
-  // descendant resolvers. Test-only extra trusted dirs are not forwarded.
+  // Allowlist only, for the OSD helper. clearEnvironment drops PYTHON*,
+  // LD_*, and ambient PATH; PATH is fixed for descendant resolvers.
   function launchEnvironment() {
     var env = {
       PATH: root.trustedPath,
@@ -118,148 +111,31 @@ Panel {
     return env
   }
 
-  function enqueue(op) {
-    var i
-    if (typeof op === "string") {
-      if (opQueue.indexOf(op) >= 0) { pump(); return }
-    } else {
-      for (i = 0; i < opQueue.length; i++) {
-        var q = opQueue[i]
-        if (typeof q !== "string" && q[0] === op[0] && (op[0] !== "set" || q[1] === op[1])) {
-          opQueue[i] = op
-          pump()
-          return
-        }
-      }
-    }
-    opQueue.push(op)
-    pump()
-  }
+  function refresh() { if (svc) svc.refresh() }
+  function refreshControls() { if (svc && connected) svc.refreshControls() }
 
-  // Every launched process is stamped with the generation it belongs to; an
-  // abort bumps the generation, so exits (and output) from killed processes
-  // can neither release the gate under a newer op nor feed stale data in.
-  property int opGen: 0
-  readonly property bool addrValid: /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/i.test(String(status.addr || ""))
-
-  function pump() {
-    if (opRunning || opQueue.length === 0) return
-    var op = opQueue.shift()
-    if (op === "controls" && (!connected || missingPbpctrl)) { Qt.callLater(root.pump); return }
-    if (op !== "status" && op !== "controls" && !addrValid) { Qt.callLater(root.pump); return }
-    opRunning = true
-    var addr = String(status.addr || "")
-    var env = root.launchEnvironment()
-    if (op === "status") {
-      statusProc.gen = opGen
-      statusProc.environment = env
-      statusProc.running = true
-    } else if (op === "controls") {
-      controlsProc.gen = opGen
-      controlsProc.environment = env
-      controlsProc.running = true
-    } else if (op[0] === "set") {
-      ctlProc.gen = opGen
-      ctlProc.environment = env
-      ctlProc.command = [root.timeoutBin, "15", root.python3Bin, "-I", root.pbpctrlPath, "-d", addr,
-        "set", op[1], "--"].concat(String(op[2]).split(" "))
-      ctlProc.running = true
-    } else {
-      actionProc.gen = opGen
-      actionProc.environment = env
-      actionProc.command = [root.timeoutBin, "15", root.python3Bin, "-I", root.pbpctrlPath, "-d", addr, "set", "anc", op[1]]
-      actionProc.running = true
-    }
-  }
-
-  function opDone(gen) {
-    if (gen !== opGen) return
-    opRunning = false
-    Qt.callLater(root.pump)
-  }
-
-  // User disconnect: kill whatever is talking to the buds right now (the
-  // script's TERM trap takes its pbpctrl child down with it), forget the
-  // queue, and reset the gate — nothing of ours may hold the link open.
-  function abortOps() {
-    opGen++
-    var procs = [statusProc, controlsProc, actionProc, ctlProc]
-    for (var i = 0; i < procs.length; i++) if (procs[i].running) procs[i].running = false
-    opQueue = []
-    opRunning = false
-    pendingAnc = ""
-  }
-
-  function refresh() { enqueue("status") }
-  function refreshControls() {
-    if (!connected || missingPbpctrl) return
-    enqueue("controls")
-  }
-
-  function applyControls(raw) {
-    var next = Model.parseStatus(Model.clip(raw, root.controlsStdoutCeiling))
-    var out = {}
-    for (var k in next) if (k.indexOf("ctl_") === 0) out[k] = next[k]
-    controls = out
-  }
-
-  // Sets run as plain argv — no shell anywhere. The "--" keeps negative
-  // values (balance, EQ) from parsing as flags. Every set is followed by a
-  // controls re-read so the UI shows the device's truth.
-  function setControl(key, args) {
-    if (!connected || missingPbpctrl) return
-    enqueue(["set", key, args])
-    enqueue("controls")
+  // Every set is followed by a re-read in the bridge, so the UI shows the
+  // device's truth.
+  function setControl(key, fields) {
+    if (!svc || !connected) return
+    svc.setControl(key, fields)
   }
 
   function setEqBand(i, v) {
     var b = eqBands.slice()
     if (b.length !== 5) return
-    b[i] = v
-    setControl("eq", b.map(function(x) { return Number(x).toFixed(1) }).join(" "))
+    b[i] = Math.round(Number(v) * 10) / 10
+    setControl("eq", { bands: b })
   }
-
-  function applyStatus(raw) {
-    var next = Model.parseStatus(Model.clip(raw, root.statusStdoutCeiling))
-    if (Object.keys(next).length === 0) return
-    status = next
-    everLoaded = true
-    // A set is in flight: keep showing the requested mode until the buds
-    // confirm it, so the buttons don't flash back to the old state.
-    if (pendingAnc !== "" && String(next.anc || "") === pendingAnc) pendingAnc = ""
-    if (opened && !cursorActive) ancIndex = root.ancModeIndex(root.anc)
-  }
-
-  // The plugin never installs anything and never elevates: this only puts
-  // the documented install command on the clipboard for the user to run in
-  // their own terminal.
-  property bool installCmdCopied: false
-  function copyInstallCommand() {
-    copyProc.environment = root.launchEnvironment()
-    copyProc.command = [root.wlCopyBin, "omarchy pkg aur add pbpctrl"]
-    copyProc.running = false
-    copyProc.running = true
-    installCmdCopied = true
-    copiedReset.restart()
-  }
-  Timer { id: copiedReset; interval: 4000; onTriggered: root.installCmdCopied = false }
 
   function setAnc(mode) {
-    if (!connected || missingPbpctrl) return
-    if (ancModes.indexOf(mode) < 0) return
-    pendingAnc = mode
-    enqueue(["anc", mode])
-    enqueue("status")
+    if (!svc || !connected) return
+    svc.setAnc(mode)
   }
 
   function cycleAnc(delta) {
-    if (!connected || missingPbpctrl || !addrValid) return
-    // Ask the buds to cycle their own configured hold-gesture loop. This
-    // keeps right/middle click identical to a physical long press instead of
-    // maintaining a second, conflicting list in the widget.
-    pendingAnc = ""
-    enqueue(["anc", delta < 0 ? "cycle-prev" : "cycle-next"])
-    enqueue("status")
+    if (!svc || !connected) return
+    svc.cycleAnc(delta)
   }
 
   function ancModeIndex(mode) {
@@ -280,27 +156,25 @@ Panel {
     if (side === "left") left = action
     else if (side === "right") right = action
     else return
-    setControl("gesture-control", left + " " + right)
+    setControl("gesture-control", { left: left, right: right })
   }
 
   function setAncGestureMode(mode, enabled) {
-    var supported = adaptiveSupported ? Model.ANC_MODES : Model.LEGACY_ANC_MODES
-    if (supported.indexOf(mode) < 0) return
+    if (ancModes.indexOf(mode) < 0) return
     var selected = ancGestureModes.slice()
     var at = selected.indexOf(mode)
     if (enabled && at < 0) selected.push(mode)
     else if (!enabled && at >= 0) selected.splice(at, 1)
     // The buds require at least two modes in their physical cycle.
     if (selected.length < 2) return
-    var args = supported.map(function(x) { return selected.indexOf(x) >= 0 ? "true" : "false" })
-    setControl("anc-gesture-loop", args.join(" "))
+    setControl("anc-gesture-loop", { modes: selected })
   }
 
   function volumeIcon(percent) {
-    if (percent >= 67) return ""
-    if (percent >= 34) return ""
-    if (percent > 0) return ""
-    return ""
+    if (percent >= 67) return ""
+    if (percent >= 34) return ""
+    if (percent > 0) return ""
+    return ""
   }
 
   function showVolumeOsd(percent) {
@@ -335,10 +209,8 @@ Panel {
   onBudsAudioActiveChanged: observeBudsVolume()
   onBudsVolumePctChanged: observeBudsVolume()
 
-
   function tooltip() {
     if (!connected) return "Pixel Buds — not connected"
-    if (missingPbpctrl) return budsName + " — pbpctrl is not installed"
     var parts = []
     if (leftPct >= 0) parts.push("L " + leftPct + "%")
     if (rightPct >= 0) parts.push("R " + rightPct + "%")
@@ -362,139 +234,22 @@ Panel {
   }
 
   Process {
-    id: statusProc
-    property int gen: 0
-    command: [root.shBin, root.scriptPath]
-    clearEnvironment: true
-    environment: ({})
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: if (statusProc.gen === root.opGen) root.applyStatus(text)
-    }
-    onExited: root.opDone(statusProc.gen)
-  }
-
-  Process {
-    id: actionProc
-    property int gen: 0
-    clearEnvironment: true
-    environment: ({})
-    onExited: function(code) {
-      if (code !== 0) root.pendingAnc = ""
-      root.opDone(actionProc.gen)
-    }
-  }
-
-  Process {
-    id: controlsProc
-    property int gen: 0
-    command: [root.shBin, root.scriptPath, "--controls"]
-    clearEnvironment: true
-    environment: ({})
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: if (controlsProc.gen === root.opGen) root.applyControls(text)
-    }
-    onExited: root.opDone(controlsProc.gen)
-  }
-
-  Process {
-    id: ctlProc
-    property int gen: 0
-    clearEnvironment: true
-    environment: ({})
-    onExited: root.opDone(ctlProc.gen)
-  }
-
-  Process {
-    id: copyProc
-    clearEnvironment: true
-    environment: ({})
-  }
-
-  Process {
     id: osdProc
     clearEnvironment: true
     environment: ({})
   }
 
-  // Connect/disconnect is event-driven: a plain signal subscription on the
-  // system bus (no BecomeMonitor, so no privileges needed). Any device's
-  // Connected/ServicesResolved flip triggers a refresh — status.sh is one
-  // cheap bluetoothctl call when it isn't the buds.
-  Process {
-    id: bluezMonitor
-    command: [root.gdbusBin, "monitor", "--system", "--dest", "org.bluez"]
-    clearEnvironment: true
-    environment: ({})
-    running: false
-    stdout: SplitParser {
-      onRead: function(line) {
-        if (line.length > 4096) return
-        if (line.indexOf("'Connected': <false>") >= 0) {
-          // A disconnect. Kill anything talking to the buds and drop the
-          // queue so no pbpctrl call holds or reopens the RFCOMM session and
-          // yanks the buds back; one cheap status pass (bluetoothctl only)
-          // then updates the UI.
-          root.abortOps()
-          rfcommFollowUp.stop()
-          root.disconnectEvent = true
-          eventDebounce.restart()
-        } else if (line.indexOf("'Connected'") >= 0 || line.indexOf("'ServicesResolved'") >= 0) {
-          root.disconnectEvent = false
-          eventDebounce.restart()
-        }
-      }
-    }
-    onExited: monitorRestart.start()
-  }
-  Timer {
-    id: monitorRestart
-    interval: 3000
-    onTriggered: {
-      bluezMonitor.environment = root.launchEnvironment()
-      bluezMonitor.running = true
-    }
-  }
-  property bool disconnectEvent: false
-  Timer {
-    id: eventDebounce
-    interval: 400
-    onTriggered: {
-      root.refresh()
-      if (!root.disconnectEvent) rfcommFollowUp.restart()
-    }
-  }
-  // The buds' RFCOMM channel isn't up the instant BlueZ says Connected, so the
-  // first status pass often has no battery/ANC; one delayed pass fills it in.
-  Timer {
-    id: rfcommFollowUp
-    interval: 4000
-    onTriggered: root.refresh()
-  }
-
-  // Battery/ANC only change while connected, so the poll runs only then
-  // (fast while the panel is open). Disconnected idles at zero cost —
-  // reconnects arrive via the BlueZ monitor above.
+  // Battery/ANC changes arrive as pushes from the buds; this slow poll is
+  // only a fallback (faster while the panel is open). Disconnected idles at
+  // zero cost — reconnects arrive via the service's BlueZ monitor.
   Timer {
     interval: root.opened ? 5000 : root.pollInterval
-    running: root.connected || root.opened
+    running: root.connected
     repeat: true
     onTriggered: root.refresh()
   }
 
-  Component.onCompleted: {
-    var env = root.launchEnvironment()
-    statusProc.environment = env
-    controlsProc.environment = env
-    actionProc.environment = env
-    ctlProc.environment = env
-    copyProc.environment = env
-    osdProc.environment = env
-    bluezMonitor.environment = env
-    bluezMonitor.running = true
-    refresh()
-  }
+  Component.onCompleted: osdProc.environment = root.launchEnvironment()
 
   PwObjectTracker { objects: root.audioSink ? [root.audioSink] : [] }
 
@@ -509,8 +264,9 @@ Panel {
     }
   }
   onConnectedChanged: {
-    if (!connected) { close(); controls = {} }
+    if (!connected) close()
   }
+  onStatusChanged: if (opened && !cursorActive) ancIndex = root.ancModeIndex(root.anc)
 
   readonly property bool shown: connected || !hideWhenDisconnected
   visible: shown
@@ -522,7 +278,7 @@ Panel {
     anchors.fill: parent
     bar: root.bar
     iconComponent: caseIcon
-    active: root.missingPbpctrl
+    active: false
     opacity: root.connected ? 1 : 0.45
     tooltipText: root.tooltip()
     onPressed: function(b) {
@@ -661,10 +417,9 @@ Panel {
             Text {
 
               textFormat: Text.PlainText
-              text: (root.missingPbpctrl ? "pbpctrl is not installed"
-                  : root.pendingAnc !== "" ? "Switching to " + Model.ancLabel(root.anc)
+              text: (root.pendingAnc !== "" ? "Switching to " + Model.ancLabel(root.anc)
                   : Model.ancLabel(root.anc)).toUpperCase()
-              color: root.missingPbpctrl ? (root.bar ? root.bar.urgent : Color.urgent) : Qt.darker(root.fg, 1.4)
+              color: Qt.darker(root.fg, 1.4)
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
               font.bold: true
@@ -685,47 +440,6 @@ Panel {
             font.bold: true
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
-          }
-        }
-
-        // ---------- Missing dependency ----------
-        Column {
-          visible: root.missingPbpctrl
-          width: parent.width
-          spacing: Style.space(10)
-
-          Text {
-
-            textFormat: Text.PlainText
-            width: parent.width
-            wrapMode: Text.WordWrap
-            text: "Battery levels and listening-mode control come from the pbpctrl CLI, which is packaged in the AUR. Run in a terminal:"
-            color: Qt.darker(root.fg, 1.4)
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
-          }
-
-          Text {
-
-            textFormat: Text.PlainText
-            width: parent.width
-            text: "omarchy pkg aur add pbpctrl"
-            color: root.fg
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
-          }
-
-          Button {
-            width: parent.width
-            text: root.installCmdCopied ? "Copied — paste it in a terminal" : "Copy the install command"
-            fontSize: Style.font.bodySmall
-            foreground: root.fg
-            fontFamily: root.fontFamily
-            horizontalPadding: Style.spacing.controlPaddingX
-            verticalPadding: Style.spacing.controlPaddingY + Style.space(2)
-            bordered: true
-            active: root.installCmdCopied
-            onClicked: root.copyInstallCommand()
           }
         }
 
@@ -760,7 +474,6 @@ Panel {
 
         // ---------- Batteries ----------
         Column {
-          visible: !root.missingPbpctrl
           width: parent.width
           spacing: Style.space(8)
 
@@ -787,10 +500,9 @@ Panel {
         }
 
         // ---------- Listening mode ----------
-        PanelSeparator { visible: !root.missingPbpctrl; foreground: root.fg }
+        PanelSeparator { foreground: root.fg }
 
         Column {
-          visible: !root.missingPbpctrl
           width: parent.width
           spacing: Style.space(10)
 
@@ -838,7 +550,6 @@ Panel {
 
         Item {
           id: advancedHeader
-          visible: !root.missingPbpctrl
           width: parent.width
           implicitHeight: advLabel.implicitHeight + Style.space(4)
 
@@ -875,7 +586,7 @@ Panel {
             textFormat: Text.PlainText
             visible: Object.keys(root.controls).length === 0
             width: parent.width
-            text: controlsProc.running ? "Reading device settings…" : "The buds reported no adjustable settings."
+            text: root.svc && root.svc.readingControls ? "Reading device settings…" : "The buds reported no adjustable settings."
             color: Qt.darker(root.fg, 1.4)
             font.family: root.fontFamily
             font.pixelSize: Style.font.bodySmall
@@ -955,7 +666,7 @@ Panel {
             from: -100; to: 100; step: 5
             value: Math.max(-100, Math.min(100, parseInt(root.controls.ctl_balance) || 0))
             format: function(v) { return v === 0 ? "center" : (v < 0 ? "L " + (-v) : "R " + v) }
-            onCommitted: function(v) { root.setControl("balance", String(v)) }
+            onCommitted: function(v) { root.setControl("balance", { value: Math.round(v) }) }
           }
 
           Repeater {
@@ -976,7 +687,7 @@ Panel {
         Text {
 
           textFormat: Text.PlainText
-          visible: !!root.status.error && !root.missingPbpctrl
+          visible: !!root.status.error
           width: parent.width
           wrapMode: Text.WordWrap
           text: String(root.status.error || "")
@@ -1094,7 +805,7 @@ Panel {
       verticalPadding: Style.spacing.controlPaddingY
       bordered: true
       active: trow.on
-      onClicked: root.setControl(trow.ctlKey, trow.on ? "false" : "true")
+      onClicked: root.setControl(trow.ctlKey, { value: !trow.on })
     }
   }
 
