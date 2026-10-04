@@ -29,6 +29,11 @@ GFPS_UUID = "df21fe2c-2515-4fdb-8886-f12c4d67927c"
 # Scripted Fast Pair messages: ModelId, then BatteryInfo (L 90%, R 85% charging, case unknown).
 GFPS_SCRIPT = bytes([0x03, 0x01, 0x00, 0x03, 0x12, 0x34, 0x56,
                      0x03, 0x03, 0x00, 0x03, 90, 0x80 | 85, 0xFF])
+GSND_UUID = "f8d1fbe4-7966-4334-8024-ff96c9330e15"
+# Scripted GSND CONTROL: wear "both", then two messages batched in one write.
+GSND_SCRIPT = [bytes([0x04, 0x05, 0x00, 0x02, 0x08, 0x06]),
+               bytes([0x04, 0x05, 0x00, 0x02, 0x08, 0x04, 0x04, 0x16, 0x00, 0x02, 0x08, 0x01])]
+SCRIPTS = {GFPS_UUID: [GFPS_SCRIPT], GSND_UUID: GSND_SCRIPT}
 XML = """
 <node>
   <interface name="org.freedesktop.DBus.ObjectManager">
@@ -63,7 +68,7 @@ def props():
         "Class": GLib.Variant("u", 0x244404),
         "Connected": GLib.Variant("b", state["connected"]),
         "ServicesResolved": GLib.Variant("b", state["resolved"]),
-        "UUIDs": GLib.Variant("as", ["0000fe2c-0000-1000-8000-00805f9b34fb", m.MAESTRO_UUID, GFPS_UUID]),
+        "UUIDs": GLib.Variant("as", ["0000fe2c-0000-1000-8000-00805f9b34fb", m.MAESTRO_UUID, GFPS_UUID, GSND_UUID]),
     }
 
 
@@ -99,9 +104,10 @@ def main():
                 inv.return_dbus_error("org.bluez.Error.Failed", "no profile")
                 return
             ours, theirs = socket.socketpair()
-            if uuid == GFPS_UUID:
-                theirs.sendall(GFPS_SCRIPT)
-                state["gfps_sock"] = theirs      # keep open; count anything the probe sends
+            if uuid in SCRIPTS:
+                for chunk in SCRIPTS[uuid]:
+                    theirs.sendall(chunk)
+                state.setdefault("socks", []).append(theirs)   # keep open; count anything sent to us
 
                 def drain(sock=theirs):
                     while True:

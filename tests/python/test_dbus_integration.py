@@ -206,21 +206,24 @@ class BridgeOverPrivateBus(unittest.TestCase):
         self.assertTrue(self.read_until(proc, "result")[-1]["ok"])  # real session unaffected
 
 
-    def test_gfps_probe_is_passive(self):
-        probe = os.path.join(REPO, "tests", "gfps-probe.py")
+    def test_stream_probe_is_passive(self):
+        probe = os.path.join(REPO, "tests", "stream-probe.py")
         proc = subprocess.run(["/usr/bin/python3", "-I", "-B", probe, "--yes-real-hardware", "--seconds", "1.5"],
                               env=self.env, capture_output=True, timeout=20)
         out = proc.stdout.decode()
         self.assertEqual(proc.returncode, 0, out + proc.stderr.decode())
-        self.assertIn("Device(0x03) ModelId(0x01) len=3 hex=123456", out)
-        self.assertIn("Device(0x03) BatteryInfo(0x03) len=3 hex=5ad5ff batteries=[90%, 85% charging, unknown]", out)
+        self.assertIn("gfps Device(0x03) ModelId(0x01) len=3 hex=123456", out)
+        self.assertIn("gfps Device(0x03) BatteryInfo(0x03) len=3 hex=5ad5ff batteries=[90%, 85% charging, unknown]", out)
+        self.assertIn("gsnd group=0x04 code=0x05 WearState len=2 hex=0806 wear=both worn", out)
+        self.assertIn("gsnd group=0x04 code=0x05 WearState len=2 hex=0804 wear=one worn", out)
+        self.assertIn("gsnd group=0x04 code=0x16 HeadGesturesActive len=2 hex=0801 head_gestures=active", out)
         self.assertIn("time is up", out)
         stats = self.control("Stats", "(a{si})")
         self.assertEqual(stats["gfps_received"], 0)        # it sent nothing
         self.assertEqual(stats["registered"], 0)
 
-    def test_gfps_probe_requires_consent_flag(self):
-        probe = os.path.join(REPO, "tests", "gfps-probe.py")
+    def test_stream_probe_requires_consent_flag(self):
+        probe = os.path.join(REPO, "tests", "stream-probe.py")
         proc = subprocess.run(["/usr/bin/python3", "-I", "-B", probe], env=self.env, capture_output=True, timeout=20)
         self.assertEqual(proc.returncode, 2)
         self.assertEqual(self.control("Stats", "(a{si})")["connects"], 0)
