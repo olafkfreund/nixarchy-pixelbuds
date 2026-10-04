@@ -25,6 +25,10 @@ from gi.repository import Gio, GLib  # noqa: E402
 from support import FakeBuds, m  # noqa: E402
 
 DEV = "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF"
+GFPS_UUID = "df21fe2c-2515-4fdb-8886-f12c4d67927c"
+# Scripted Fast Pair messages: ModelId, then BatteryInfo (L 90%, R 85% charging, case unknown).
+GFPS_SCRIPT = bytes([0x03, 0x01, 0x00, 0x03, 0x12, 0x34, 0x56,
+                     0x03, 0x03, 0x00, 0x03, 90, 0x80 | 85, 0xFF])
 XML = """
 <node>
   <interface name="org.freedesktop.DBus.ObjectManager">
@@ -48,7 +52,8 @@ XML = """
 </node>
 """
 
-state = {"connected": True, "resolved": True, "profile": None, "connects": 0, "buds": None}
+state = {"connected": True, "resolved": True, "profile": None, "profiles": {}, "connects": 0, "buds": None,
+         "gfps_received": 0}
 
 
 def props():
@@ -58,7 +63,7 @@ def props():
         "Class": GLib.Variant("u", 0x244404),
         "Connected": GLib.Variant("b", state["connected"]),
         "ServicesResolved": GLib.Variant("b", state["resolved"]),
-        "UUIDs": GLib.Variant("as", ["0000fe2c-0000-1000-8000-00805f9b34fb", m.MAESTRO_UUID]),
+        "UUIDs": GLib.Variant("as", ["0000fe2c-0000-1000-8000-00805f9b34fb", m.MAESTRO_UUID, GFPS_UUID]),
     }
 
 
@@ -72,25 +77,50 @@ def main():
             inv.return_value(GLib.Variant("(a{oa{sa{sv}}})", ({DEV: {"org.bluez.Device1": props()}},)))
         elif method == "RegisterProfile":
             ppath, uuid, _opts = params.unpack()
-            state["profile"] = (sender, ppath, uuid)
+            state["profiles"][uuid] = (sender, ppath, uuid)
+            if uuid == m.MAESTRO_UUID:
+                state["profile"] = (sender, ppath, uuid)
             inv.return_value(None)
         elif method == "UnregisterProfile":
-            state["profile"] = None
+            (ppath,) = params.unpack()
+            for uuid, entry in list(state["profiles"].items()):
+                if entry[1] == ppath:
+                    del state["profiles"][uuid]
+                    if uuid == m.MAESTRO_UUID:
+                        state["profile"] = None
             inv.return_value(None)
         elif method == "GetAll":
             inv.return_value(GLib.Variant("(a{sv})", (props(),)))
         elif method == "ConnectProfile":
+            (uuid,) = params.unpack()
             state["connects"] += 1
-            if state["profile"] is None or not state["connected"]:
+            profile = state["profiles"].get(uuid)
+            if profile is None or not state["connected"]:
                 inv.return_dbus_error("org.bluez.Error.Failed", "no profile")
                 return
             ours, theirs = socket.socketpair()
-            state["buds"] = FakeBuds(theirs)
-            state["buds"].start()
+            if uuid == GFPS_UUID:
+                theirs.sendall(GFPS_SCRIPT)
+                state["gfps_sock"] = theirs      # keep open; count anything the probe sends
+
+                def drain(sock=theirs):
+                    while True:
+                        try:
+                            data = sock.recv(4096)
+                        except OSError:
+                            return
+                        if not data:
+                            return
+                        state["gfps_received"] += len(data)
+                import threading
+                threading.Thread(target=drain, daemon=True).start()
+            else:
+                state["buds"] = FakeBuds(theirs)
+                state["buds"].start()
             fds = Gio.UnixFDList.new()
             fds.append(ours.fileno())
             ours.close()
-            owner, ppath, _ = state["profile"]
+            owner, ppath, _ = profile
 
             def done(c, res):
                 try:
@@ -118,8 +148,9 @@ def main():
             buds = state["buds"]
             inv.return_value(GLib.Variant("(a{si})", ({
                 "connects": state["connects"],
-                "registered": 1 if state["profile"] else 0,
+                "registered": len(state["profiles"]),
                 "buds_stopped": 1 if buds is not None and buds.stopped.is_set() else 0,
+                "gfps_received": state["gfps_received"],
             },)))
         else:
             inv.return_dbus_error("org.freedesktop.DBus.Error.UnknownMethod", method)

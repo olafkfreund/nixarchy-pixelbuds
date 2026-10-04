@@ -447,7 +447,7 @@ class BluezGio:
     daemon thread so BlueZ's Profile1 calls and property signals are served
     immediately, even while the main thread waits on the buds."""
 
-    def __init__(self):
+    def __init__(self, uuid=maestro.MAESTRO_UUID, tag="maestro"):
         import gi
         gi.require_version("Gio", "2.0")
         gi.require_version("GLib", "2.0")
@@ -456,7 +456,8 @@ class BluezGio:
         self.bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
         self.ctx = GLib.MainContext.new()
         self.loop = GLib.MainLoop.new(self.ctx, False)
-        self.profile_path = "/io/github/rdoupe/pixelbuds/maestro_%d" % os.getpid()
+        self.uuid = uuid
+        self.profile_path = "/io/github/rdoupe/pixelbuds/%s_%d" % (tag, os.getpid())
         self.link = None
         self.device = None
         self.bluez_owner = None
@@ -511,7 +512,7 @@ class BluezGio:
         if not ready.wait(5.0) or errors:
             raise Stop("error", "D-Bus setup failed")
         self._call("/org/bluez", "org.bluez.ProfileManager1", "RegisterProfile",
-                   self.GLib.Variant("(osa{sv})", (self.profile_path, maestro.MAESTRO_UUID, {
+                   self.GLib.Variant("(osa{sv})", (self.profile_path, self.uuid, {
                        "Role": self.GLib.Variant("s", "client"),
                        "RequireAuthentication": self.GLib.Variant("b", False),
                        "RequireAuthorization": self.GLib.Variant("b", False),
@@ -589,7 +590,7 @@ class BluezGio:
                     msg = getattr(error, "message", "") or str(error)
                     self.link.set_connect_error(msg[:200])
             self.bus.call("org.bluez", self.device.path, "org.bluez.Device1", "ConnectProfile",
-                          self.GLib.Variant("(s)", (maestro.MAESTRO_UUID,)), None,
+                          self.GLib.Variant("(s)", (self.uuid,)), None,
                           self.Gio.DBusCallFlags.NONE, int(CONNECT_TIMEOUT * 1000), None, done)
         self._invoke(go)
 
