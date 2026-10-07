@@ -72,5 +72,58 @@
           nixarchy-pixelbuds = pluginFor pkgs;
         }
       );
+
+      checks = forAll (
+        system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+          py = pythonFor pkgs;
+          plugin = self.packages.${system}.default;
+        in
+        {
+          default =
+            pkgs.runCommand "nixarchy-pixelbuds-check"
+              {
+                nativeBuildInputs = [
+                  py
+                  pkgs.jq
+                  pkgs.nodejs
+                ];
+              }
+              ''
+                # The offline suite, run against the packaged bridge. Only the
+                # copied tests are rewritten to store paths. launch-boundary-test.sh
+                # is skipped: it asserts the upstream /usr/bin literals that the
+                # package replaces by design.
+                cp -r ${./tests} tests
+                cp -r ${plugin}/bridge bridge
+                cp ${plugin}/Model.js Model.js
+                chmod -R u+w .
+                substituteInPlace tests/python/test_dbus_integration.py \
+                  --replace-fail '"/usr/bin/dbus-daemon"' '"${pkgs.dbus}/bin/dbus-daemon"' \
+                  --replace-fail '["/usr/bin/python3"' '["${py}/bin/python3"'
+                (cd tests/python && PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover -s . -p 'test_*.py')
+                node tests/js/model-test.js
+
+                # No Arch binary path left in the shipped QML (an if: set -e ignores `! cmd`).
+                if grep -n '"/usr/bin/\(python3\|gdbus\|omarchy-shell\)"' ${plugin}/*.qml; then
+                  echo "Arch binary path left in the package" >&2; exit 1
+                fi
+
+                jq -e '.id == "nixarchy.pixelbuds"' ${plugin}/manifest.json > /dev/null
+                for f in $(jq -r '.entryPoints[]' ${plugin}/manifest.json); do
+                  test -f "${plugin}/$f" || { echo "entry point $f missing" >&2; exit 1; }
+                done
+
+                # omarchy-plugin-validate refuses symlinks inside a plugin.
+                test -z "$(find ${plugin}/ -mindepth 1 -type l)"
+
+                # The bridge runs with a cleared environment.
+                env -i ${py}/bin/python3 -I -B -c 'import gi; gi.require_version("Gio", "2.0"); gi.require_version("GLib", "2.0"); from gi.repository import Gio, GLib'
+
+                touch "$out"
+              '';
+        }
+      );
     };
 }
