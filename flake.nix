@@ -54,11 +54,15 @@
             # Upstream hardcodes Arch paths. Through envfs, /usr/bin/python3 on
             # NixOS has no PyGObject, and a cleared environment cannot find
             # omarchy-shell. --replace-fail so a moved literal fails the build.
+            # Panel.qml's PATH is for omarchy-shell, a bash script that runs qs,
+            # timeout and grep by name; envfs resolves nothing from
+            # PATH=/usr/bin:/bin. Service.qml keeps it: the bridge execs nothing.
             substituteInPlace "$out/Service.qml" \
               --replace-fail '"/usr/bin/python3"' '"${py}/bin/python3"' \
               --replace-fail '"/usr/bin/gdbus"' '"${pkgs.glib.bin}/bin/gdbus"'
             substituteInPlace "$out/Panel.qml" \
-              --replace-fail '"/usr/bin/omarchy-shell"' '"/run/current-system/sw/bin/omarchy-shell"'
+              --replace-fail '"/usr/bin/omarchy-shell"' '"/run/current-system/sw/bin/omarchy-shell"' \
+              --replace-fail '"/usr/bin:/bin"' '"/run/current-system/sw/bin"'
           '';
     in
     {
@@ -106,11 +110,13 @@
                 node tests/js/model-test.js
 
                 # No Arch binary path left in the shipped QML (an if: set -e ignores `! cmd`).
-                if grep -n '"/usr/bin/\(python3\|gdbus\|omarchy-shell\)"' ${plugin}/*.qml; then
+                if grep -n '"/usr/bin/\(python3\|gdbus\|omarchy-shell\)"\|"/usr/bin:/bin"' ${plugin}/Panel.qml ${plugin}/Service.qml | grep -v 'Service.qml:.*trustedPath'; then
                   echo "Arch binary path left in the package" >&2; exit 1
                 fi
 
                 jq -e '.id == "nixarchy.pixelbuds"' ${plugin}/manifest.json > /dev/null
+                # Guard first: a jq error inside $(...) would make the loop a no-op.
+                jq -e '.entryPoints | length > 0' ${plugin}/manifest.json > /dev/null
                 for f in $(jq -r '.entryPoints[]' ${plugin}/manifest.json); do
                   test -f "${plugin}/$f" || { echo "entry point $f missing" >&2; exit 1; }
                 done
