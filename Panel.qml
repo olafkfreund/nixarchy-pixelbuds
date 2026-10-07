@@ -12,8 +12,8 @@ import "Model.js" as Model
 // Hidden entirely while no Pixel Buds are connected.
 Panel {
   id: root
-  moduleName: "io.github.rdoupe.pixelbuds"
-  ipcTarget: "io.github.rdoupe.pixelbuds"
+  moduleName: "nixarchy.pixelbuds"
+  ipcTarget: "nixarchy.pixelbuds"
   manageIpc: false
 
   property bool advancedOpen: false
@@ -221,7 +221,7 @@ Panel {
   }
 
   IpcHandler {
-    target: "io.github.rdoupe.pixelbuds"
+    target: "nixarchy.pixelbuds"
 
     function open() { root.open() }
     function close() { root.close() }

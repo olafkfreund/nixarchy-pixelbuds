@@ -1,5 +1,8 @@
 # Pixel Buds for Omarchy
 
+Fork of [rdoupe/omarchy-pixelbuds](https://github.com/rdoupe/omarchy-pixelbuds),
+packaged for [nixarchy](https://github.com/olafkfreund/nixarchy) with a Nix flake.
+
 Pixel Buds battery and listening-mode control, right in the Omarchy bar.
 Omarchy-native: everything it needs ships with a stock Omarchy install, so
 there is nothing else to install or build.
@@ -29,7 +32,7 @@ happen.
 Upgrading from 1.x:
 
 ```bash
-omarchy plugin update io.github.rdoupe.pixelbuds
+omarchy plugin update nixarchy.pixelbuds
 omarchy restart shell
 ```
 
@@ -82,13 +85,37 @@ never installs software and never elevates privileges.
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/rdoupe/omarchy-pixelbuds.git --enable
+omarchy plugin add https://github.com/olafkfreund/nixarchy-pixelbuds.git --enable
+```
+
+## NixOS / nixarchy
+
+On NixOS, `/usr/bin/python3` has no PyGObject, so install through the flake.
+It patches the Python, `gdbus` and `omarchy-shell` paths to store paths at
+build time:
+
+```nix
+# flake inputs
+nixarchy-pixelbuds = {
+  url = "github:olafkfreund/nixarchy-pixelbuds";
+  inputs.nixpkgs.follows = "nixpkgs";
+};
+
+# Home Manager
+programs.nixarchy.plugins."nixarchy.pixelbuds".src =
+  inputs.nixarchy-pixelbuds.packages.${pkgs.stdenv.hostPlatform.system}.default;
+```
+
+Then enable it once:
+
+```bash
+omarchy plugin enable nixarchy.pixelbuds --section right
 ```
 
 ## Remove
 
 ```bash
-omarchy plugin remove io.github.rdoupe.pixelbuds
+omarchy plugin remove nixarchy.pixelbuds
 ```
 
 Outside the plugin directory the plugin writes only the cached case-battery
@@ -108,13 +135,13 @@ Configure via the bar widget settings or directly in
 
 ## IPC
 
-The widget exposes the IPC target `io.github.rdoupe.pixelbuds` with methods `open`,
+The widget exposes the IPC target `nixarchy.pixelbuds` with methods `open`,
 `close`, `toggle`, `showAdvanced`, `refresh`, `cycleAnc`, and `setAnc(mode)` where mode is one
 of `off`, `active`, `aware`, `adaptive`:
 
 ```bash
-omarchy-shell io.github.rdoupe.pixelbuds cycleAnc
-omarchy-shell io.github.rdoupe.pixelbuds setAnc aware
+omarchy-shell nixarchy.pixelbuds cycleAnc
+omarchy-shell nixarchy.pixelbuds setAnc aware
 ```
 
 Handy for keybindings.
